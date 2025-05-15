@@ -1,0 +1,14 @@
+name: Continuous integration
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: RUST_LOG=trace cargo test --all-features --release
+      - run: cargo clippy -- -D warnings
