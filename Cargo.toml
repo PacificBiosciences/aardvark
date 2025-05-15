@@ -2,6 +2,11 @@
 name = "aardvark"
 version = "0.5.1"
 edition = "2021"
+license = "MIT"
+description = "Aardvark - A tool for sniffing out the differences in vari-Ants"
+homepage = "https://github.com/PacificBiosciences/aardvark"
+repository = "https://github.com/PacificBiosciences/aardvark"
+readme = "README.md"
 
 [build-dependencies]
 vergen-gitcl = { version = "1.0.5", features = ["build"] }

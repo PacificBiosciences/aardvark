@@ -3,10 +3,10 @@
     "name": "aardvark",
     "version": "0.5.1",
     "authors": null,
-    "repository": null,
-    "license": null,
+    "repository": "https://github.com/PacificBiosciences/aardvark",
+    "license": "MIT",
     "license_file": null,
-    "description": null
+    "description": "Aardvark - A tool for sniffing out the differences in vari-Ants"
   },
   {
     "name": "adler2",

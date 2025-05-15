@@ -2,7 +2,7 @@
 
 <h1 align="center">Aardvark</h1>
 
-<p align="center">A tool sniffing out the differences in vari-Ants</p>
+<p align="center">A tool for sniffing out the differences in vari-Ants</p>
 
 ***
 

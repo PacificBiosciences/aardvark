@@ -8,7 +8,7 @@ conda create -n aardvark -c bioconda aardvark
 # OR install latest into current conda environment
 conda install aardvark
 # OR install a specific version into current conda environment
-conda install aardvark=0.4.1
+conda install aardvark=0.5.1
 ```
 
 ## From GitHub
@@ -21,10 +21,10 @@ Use the following instructions to get the most recent version directly from GitH
 4. Test the binary file by running it with the help option (`-h`).
 5. Visit the [User guide](./user_guide.md) for details on running Aardvark.
 
-### Example with v0.4.1
+### Example with v0.5.1
 ```bash
 # modify this to update the version
-VERSION="v0.4.1"
+VERSION="v0.5.1"
 # get the release file
 wget https://github.com/PacificBiosciences/Aardvark/releases/download/${VERSION}/aardvark-${VERSION}-x86_64-unknown-linux-gnu.tar.gz
 # decompress the file into folder ${VERSION}
