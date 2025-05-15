@@ -1,4 +1,4 @@
-<h1 align="center"><img width="300px" src="images/logo_aardvark.svg"/></h1>
+<h1 align="center"><img width="300px" src="docs/img/logo_aardvark.svg"/></h1>
 
 <h1 align="center">Aardvark</h1>
 
