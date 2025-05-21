@@ -1,5 +1,5 @@
 
-
+use flate2::write::GzEncoder;
 use serde::Serialize;
 use std::fs::File;
 use std::path::Path;
@@ -12,7 +12,7 @@ use crate::writers::summary::{COMPARE_BASEPAIR, COMPARE_GT, COMPARE_HAP};
 /// This is a wrapper for writing out summary stats to a file
 pub struct RegionSummaryWriter {
     /// Handle on the writer
-    csv_writer: csv::Writer<File>,
+    csv_writer: csv::Writer<GzEncoder<File>>,
 }
 
 /// Contains all the data written to each row of our stats file
@@ -65,14 +65,19 @@ impl RegionSummaryRow {
 impl RegionSummaryWriter {
     /// Creates a new writer to accumulate stats
     /// # Arguments
-    /// * `filename` - path to the filename that will get opened, must be .csv/.tsv
+    /// * `filename` - path to the filename that will get opened, must be .tsv.gz
     pub fn new(filename: &Path) -> csv::Result<Self> {
         // modify the delimiter to "," if it ends with .csv
-        let is_csv: bool = filename.extension().unwrap_or_default() == "csv";
-        let delimiter: u8 = if is_csv { b',' } else { b'\t' };
-        let csv_writer: csv::Writer<File> = csv::WriterBuilder::new()
+        let delimiter: u8 = b'\t';
+        let gzip_writer = GzEncoder::new(
+            File::create(filename)?,
+            // default compression = 6; the "best" mode was 2x slow with very little gains
+            flate2::Compression::default()
+        );
+
+        let csv_writer= csv::WriterBuilder::new()
             .delimiter(delimiter)
-            .from_path(filename)?;
+            .from_writer(gzip_writer);
         Ok(Self {
             csv_writer
         })

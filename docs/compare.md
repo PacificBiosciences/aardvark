@@ -111,7 +111,28 @@ The debug folder (`--debug-folder`) contains many files that may be useful for d
 The following files are currently created when this option is specified:
 
 * `cli_settings.json` - JSON dump of the exact parameters that were used to run Aardvark
-* `region_summary.tsv` - A [region-specific TSV file](#region-summary-file), containing summary statistics for each sub-problem that was created as part of the Aardvark process
+* `region_sequences.tsv.gz` - A [region-specific sequence file](#region-sequence-file) containing the Aardvark-constructed haplotype sequences for each sub-problem that was created as part of the Aardvark process. This file is gzip-compressed to reduce storage.
+* `region_summary.tsv.gz` - A [region-specific summary file](#region-summary-file), containing summary statistics for each sub-problem that was created as part of the Aardvark process. This file is gzip-compressed to reduce storage.
+
+### Region sequence file
+This file captures the constructed haplotype sequences for each region.
+
+Fields:
+* `region_id` - A unique region identifier corresponding to the `RI` field of the [debug VCFs](#debug-vcf-details)
+* `coordinates` - The coordinates of the corresponding region
+* `ref_seq` - The reference sequence within the region, which is copied from the provided reference file
+* `truth_seq1` - The first constructed truth haplotype sequence
+* `truth_seq2` - The second constructed truth haplotype sequence
+* `query_seq1` - The first constructed query haplotype sequence. In an exact match, this is expected to be identical to `truth_seq1`.
+* `query_seq2` - The second constructed query haplotype sequence. In an exact match, this is expected to be identical to `truth_seq2`.
+
+Partial example:
+```
+region_id	coordinates	ref_seq	truth_seq1	truth_seq2	query_seq1	query_seq2
+0	chr1:782956-783056	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCAGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT
+1	chr1:783125-783225	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACATGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG
+...
+```
 
 ### Region summary file
 This file captures summary metrics for each discrete region, similar to the overall summary statistics file.
