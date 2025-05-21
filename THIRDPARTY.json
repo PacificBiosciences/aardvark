@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "authors": null,
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -334,7 +334,7 @@
   },
   {
     "name": "crossbeam-channel",
-    "version": "0.5.14",
+    "version": "0.5.15",
     "authors": null,
     "repository": "https://github.com/crossbeam-rs/crossbeam",
     "license": "Apache-2.0 OR MIT",

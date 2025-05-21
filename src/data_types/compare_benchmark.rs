@@ -35,6 +35,9 @@ pub struct CompareBenchmark {
     /// Variant metrics for query variant
     query_variant_data: Vec<VariantMetrics>,
 
+    /// optional sequence bundle, this can use a lot of memory
+    sequence_bundle: Option<SequenceBundle>,
+
     // TODO: phasing stats, if we care to report it
 }
 
@@ -44,7 +47,9 @@ impl CompareBenchmark {
     /// * `region_id` - unique region identifier
     /// * `bm_edit_distance_h1` - edit distance between the query haplotype 1 and the best path through the truth graph
     /// * `bm_edit_distance_h2` - edit distance between the query haplotype 2 and the best path through the truth graph
-    pub fn new(region_id: u64, bm_edit_distance_h1: usize, bm_edit_distance_h2: usize) -> Self {
+    pub fn new(
+        region_id: u64, bm_edit_distance_h1: usize, bm_edit_distance_h2: usize,
+    ) -> Self {
         Self {
             region_id,
             bm_edit_distance_h1,
@@ -57,6 +62,7 @@ impl CompareBenchmark {
             variant_basepair: Default::default(),
             truth_variant_data: Default::default(),
             query_variant_data: Default::default(),
+            sequence_bundle: None,
         }
     }
 
@@ -211,6 +217,11 @@ impl CompareBenchmark {
         Ok(())
     }
 
+    /// Adds a sequence bundle to this return value
+    pub fn add_sequence_bundle(&mut self, sequence_bundle: SequenceBundle) {
+        self.sequence_bundle = Some(sequence_bundle);
+    }
+
     // wrappers that are useful for summaries
     /// Total edit distance: if 0, then it means both haplotypes exactly match *a* path in the graph.
     /// Note that this does not mean the genotypes are perfect.
@@ -253,5 +264,28 @@ impl CompareBenchmark {
 
     pub fn variant_basepair(&self) -> &BTreeMap<VariantType, SummaryMetrics> {
         &self.variant_basepair
+    }
+
+    pub fn sequence_bundle(&self) -> Option<&SequenceBundle> {
+        self.sequence_bundle.as_ref()
+    }
+}
+
+/// Wrapper that just contains a ton of sequences
+#[derive(Clone, Debug)]
+pub struct SequenceBundle {
+    pub ref_seq: String,
+    pub truth_seq1: String,
+    pub truth_seq2: String,
+    pub query_seq1: String,
+    pub query_seq2: String
+}
+
+impl SequenceBundle {
+    /// Constructor
+    pub fn new(ref_seq: String, truth_seq1: String, truth_seq2: String, query_seq1: String, query_seq2: String) -> Self {
+        Self {
+            ref_seq, truth_seq1, truth_seq2, query_seq1, query_seq2
+        }
     }
 }

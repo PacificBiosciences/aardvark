@@ -3,7 +3,7 @@ use anyhow::{bail, ensure, Context};
 use log::debug;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
 
-use crate::data_types::compare_benchmark::CompareBenchmark;
+use crate::data_types::compare_benchmark::{CompareBenchmark, SequenceBundle};
 use crate::data_types::compare_region::CompareRegion;
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::phase_enums::{Allele, Haplotype, PhasedZygosity};
@@ -25,7 +25,8 @@ const SUPPORTED_VARIANT_TYPES: [VariantType; 4] = [
 /// # Arguments
 /// * `problem` - core problem that we want to do the comparison on
 /// * `reference_genome` - shared pre-loaded reference genome, intended to be provided from Arc<ReferenceGenome> reference in parallelization
-pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &ReferenceGenome) -> anyhow::Result<CompareBenchmark> {
+/// * `enable_sequences` - if True, saves the haplotype sequences which may consume more memory than normal
+pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &ReferenceGenome, enable_sequences: bool) -> anyhow::Result<CompareBenchmark> {
     // pull out core components from the problem space
     let problem_id = problem.region_id();
     let coordinates = problem.coordinates();
@@ -37,6 +38,11 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
     let raw_truth_zygosity = problem.truth_zygosity();
     let query_variants = problem.query_variants();
     let raw_query_zygosity = problem.query_zygosity();
+
+    // pull out the reference sequence also
+    let ref_start = coordinates.start() as usize;
+    let ref_end = coordinates.end() as usize;
+    let ref_seq = &reference[ref_start..ref_end];
 
     // first, generate the best query sequences based on the truth sequences
     let all_optimized_haplotypes = optimize_sequences(
@@ -52,16 +58,27 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
         if optimized_haplotypes.is_exact_match() {
             // TODO: account for phasing if we ever add it
             debug!("B#{problem_id} exact match identified:");
-            let ref_start = coordinates.start() as usize;
-            let ref_end = coordinates.end() as usize;
 
             // this compute truth and query at once, under the assumption of exact match
-            return generate_exact_match(
+            let mut exact_result = generate_exact_match(
                 problem,
                 truth_variants, raw_truth_zygosity,
                 query_variants, raw_query_zygosity,
                 &reference[ref_start..ref_end], &optimized_haplotypes
-            );
+            )?;
+
+            if enable_sequences {
+                let bundle = SequenceBundle::new(
+                    String::from_utf8(ref_seq.to_vec())?,
+                    String::from_utf8(optimized_haplotypes.truth_seq1().to_vec())?,
+                    String::from_utf8(optimized_haplotypes.truth_seq2().to_vec())?,
+                    String::from_utf8(optimized_haplotypes.query_seq1().to_vec())?,
+                    String::from_utf8(optimized_haplotypes.query_seq2().to_vec())?,
+                );
+                exact_result.add_sequence_bundle(bundle);
+            }
+
+            return Ok(exact_result);
         }
 
         // if we made it here, we did not find an exact match, so we need to tease apart which variants are FP and FN
@@ -89,7 +106,7 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
         )?;
 
         // first iterate over all truth inputs
-        let truth_stats  = compare_expected_observed(
+        let mut truth_stats  = compare_expected_observed(
             problem_id,
             optimized_haplotypes.ed1(),
             optimized_haplotypes.ed2(),
@@ -99,6 +116,17 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
             &truth_hap2,
             hap2_compare.truth_alleles()
         )?;
+
+        if enable_sequences {
+            let bundle = SequenceBundle::new(
+                String::from_utf8(ref_seq.to_vec())?,
+                String::from_utf8(optimized_haplotypes.truth_seq1().to_vec())?,
+                String::from_utf8(optimized_haplotypes.truth_seq2().to_vec())?,
+                String::from_utf8(optimized_haplotypes.query_seq1().to_vec())?,
+                String::from_utf8(optimized_haplotypes.query_seq2().to_vec())?,
+            );
+            truth_stats.add_sequence_bundle(bundle);
+        }
 
         // now iterate over all the query inputs
         let query_stats = compare_expected_observed(
@@ -144,7 +172,7 @@ fn compare_expected_observed(
     problem_id: u64, ed1: usize, ed2: usize,
     variants: &[Variant],
     exp_hap1: &[Allele], obs_hap1: &[Allele],
-    exp_hap2: &[Allele], obs_hap2: &[Allele]
+    exp_hap2: &[Allele], obs_hap2: &[Allele],
 ) -> anyhow::Result<CompareBenchmark> {
     // sanity checks
     ensure!(variants.len() == exp_hap1.len(), "all variants and haplotype alleles must be equal length");
@@ -153,7 +181,9 @@ fn compare_expected_observed(
     ensure!(variants.len() == obs_hap2.len(), "all variants and haplotype alleles must be equal length");
 
     // initialize our return data
-    let mut benchmark = CompareBenchmark::new(problem_id, ed1, ed2);
+    let mut benchmark = CompareBenchmark::new(
+        problem_id, ed1, ed2
+    );
 
     // zip and iterate
     let zip1 = exp_hap1.iter().cloned().zip(obs_hap1.iter().cloned());
@@ -683,13 +713,21 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACGGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACGGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCGTTACCA");
     }
 
     /// Test where the truth has two SNVs side-by-side, but the query set has one "indel" entry and the phase orientation is flipped.
@@ -719,7 +757,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1}); // two variants here
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1});
@@ -729,6 +767,14 @@ mod tests {
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()
         ]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACGTTTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACGTTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCGTTACCA");
     }
 
     /// Opposite of the previous test: truth has one variant entry, query has two.  Should still be identical.
@@ -757,7 +803,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2}); // only one variant in truth set
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2});
@@ -767,6 +813,14 @@ mod tests {
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap(),
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()
         ]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACGTTTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACGTTTACCA");
     }
 
     /// Insertion of a C. In truth, it is left shifted, in query it is right shifted
@@ -793,13 +847,21 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1}); // only one variant in truth set
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 2}); // but two haplotype variants
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 2, 2).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 2, 2).unwrap()]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACCCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACCCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCCGTTACCA");
     }
 
     /// Simple test with just a single SNV. The calls are an exact clone() of the truth inputs.
@@ -820,13 +882,21 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 1); // 1 BP ed
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap()]);
         assert_eq!(result.query_variant_data(), &[]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACGGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCGTTACCA");
     }
 
     #[test]
@@ -857,7 +927,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 2); // two BP delta
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 2});
@@ -871,6 +941,14 @@ mod tests {
             VariantMetrics::new(VariantSource::Query, 1, 2).unwrap(), // FP in query space
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()
         ]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACGGTTCCCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACGGTTCCCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGCTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACGGTTACCA");
     }
 
     #[test]
@@ -896,7 +974,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
         assert_eq!(result.total_ed(), 1); // path through graph is an exact match still
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 1, truth_fn: 1, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 1, truth_fn: 1, query_tp: 1});
@@ -908,6 +986,14 @@ mod tests {
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap(), // TP in query space since it started with 1
             VariantMetrics::new(VariantSource::Query, 0, 1).unwrap() // FP in query space
         ]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACCGCTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACCGATACCA"); // it puts A into q1
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGCTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCGCTACCA"); // it puts C into q2; these can technically swap
     }
 
     #[test]
@@ -927,7 +1013,7 @@ mod tests {
         let problem = CompareRegion::new(
             0, region, variants.clone(), zygosities.clone(), variants, zygosities
         ).unwrap();
-        let result = solve_compare_region(&problem, &reference_genome).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
 
         // our results should have two of the SNVs skipped, one in truth and one in query; this is because they can't get incorporated
         assert_eq!(result.total_ed(), 0); // add ED comes from the variant skips
@@ -944,6 +1030,14 @@ mod tests {
             VariantMetrics::toggle_source(&VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()),
             VariantMetrics::toggle_source(&VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap())
         ]);
+
+        // check the sequences also
+        let sequence_bundle = result.sequence_bundle().unwrap();
+        assert_eq!(&sequence_bundle.ref_seq,    "ACCGTTACCA");
+        assert_eq!(&sequence_bundle.truth_seq1, "ACCGGTACCA");
+        assert_eq!(&sequence_bundle.query_seq1, "ACCGGTACCA");
+        assert_eq!(&sequence_bundle.truth_seq2, "ACCGTACCA");
+        assert_eq!(&sequence_bundle.query_seq2, "ACCGTACCA");
     }
 
     #[test]

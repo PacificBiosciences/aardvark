@@ -17,6 +17,7 @@ use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
 use aardvark::parsing::region_generation::RegionIterator;
 use aardvark::util::json_io::save_json;
 use aardvark::waffle_solver::solve_compare_region;
+use aardvark::writers::region_sequence::RegionSequenceWriter;
 use aardvark::writers::region_summary::RegionSummaryWriter;
 use aardvark::writers::summary::SummaryWriter;
 use aardvark::writers::variant_categorizer::{VariantCategorizer, index_categorizer};
@@ -145,8 +146,20 @@ fn run_compare(settings: CompareSettings) {
 
     let mut region_writer = settings.debug_folder.as_ref().map(|debug_path| {
         info!("Opening debug region writer file...");
-        let out_fn = debug_path.join("region_summary.tsv");
+        let out_fn = debug_path.join("region_summary.tsv.gz");
         match RegionSummaryWriter::new(&out_fn) {
+            Ok(rsw) => rsw,
+            Err(e) => {
+                error!("Error while building region summary writer: {e:#}");
+                std::process::exit(exitcode::IOERR);
+            }
+        }
+    });
+
+    let mut region_seq_writer = settings.debug_folder.as_ref().map(|debug_path| {
+        info!("Opening debug sequence writer file...");
+        let out_fn = debug_path.join("region_sequences.tsv.gz");
+        match RegionSequenceWriter::new(&out_fn) {
             Ok(rsw) => rsw,
             Err(e) => {
                 error!("Error while building region summary writer: {e:#}");
@@ -189,7 +202,7 @@ fn run_compare(settings: CompareSettings) {
         .progress_with_style(style)
         .map(|region| {
             debug!("region = {region:?}");
-            let comparison = match solve_compare_region(&region, &reference_genome) {
+            let comparison = match solve_compare_region(&region, &reference_genome, region_seq_writer.is_some()) {
                 Ok(r) => Some(r),
                 Err(e) => {
                     error!("Error while solving compare region #{} ({}): {e:#}", region.region_id(), region.coordinates());
@@ -218,8 +231,15 @@ fn run_compare(settings: CompareSettings) {
                 }
             }
 
+            if let Some(rsw) = region_seq_writer.as_mut() {
+                if let Err(e) = rsw.write_region_sequences(&region, &comparison) {
+                    error!("Error while writing region sequences results: {e:#}");
+                    std::process::exit(exitcode::IOERR);
+                }
+            }
+
             if let Err(e) = vcf_writer.write_results(&region, &comparison) {
-                error!("Error while writing debug VCF results: {e:#}");
+                error!("Error while writing VCF results: {e:#}");
                 std::process::exit(exitcode::IOERR);
             }
 
