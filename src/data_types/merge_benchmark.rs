@@ -1,7 +1,9 @@
 
+use itertools::Itertools;
+
 /// Classification of output for merging.
 /// In general, anything that is not "Different" will go into the outputs.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MergeClassification {
     /// Indicates they are different
     Different,
@@ -15,6 +17,26 @@ pub enum MergeClassification {
     BasepairIdentical
     // TODO: phasing identical if we add phasing
     // TODO: non-conflicting, with more info
+}
+
+impl std::fmt::Display for MergeClassification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let simple_form = self.simplify();
+        let index_seq = match self {
+            MergeClassification::Different |
+            MergeClassification::BasepairIdentical => String::default(),
+            MergeClassification::NoConflict { indices } |
+            MergeClassification::MajorityAgree { indices } => {
+                indices.iter()
+                    .map(|i| format!("_{i}"))
+                    .join("")
+            },
+            MergeClassification::ConflictSelection { index } => format!("_{index}"),
+        };
+
+        f.write_str(simple_form)?;
+        f.write_str(&index_seq)
+    }
 }
 
 impl MergeClassification {

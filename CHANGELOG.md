@@ -1,3 +1,7 @@
+# v0.5.3
+## Changes
+- Added a new optional output file for merging (`--output-summary`) which contains statistics on the merge. See documentation for details.
+
 # v0.5.2
 ## Changes
 - Added a new file (`region_sequences.tsv.gz`) to the debug output for `aardvark compare`. This file contains the constructed haplotype sequences for each region.

@@ -17,6 +17,7 @@ use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
 use aardvark::parsing::region_generation::RegionIterator;
 use aardvark::util::json_io::save_json;
 use aardvark::waffle_solver::solve_compare_region;
+use aardvark::writers::merge_summary::MergeSummaryWriter;
 use aardvark::writers::region_sequence::RegionSequenceWriter;
 use aardvark::writers::region_summary::RegionSummaryWriter;
 use aardvark::writers::summary::SummaryWriter;
@@ -445,6 +446,12 @@ fn run_merge(settings: MergeSettings) {
         }
     };
 
+    let mut summary_writer = if settings.output_summary_filename.is_some() {
+        Some(MergeSummaryWriter::default())
+    } else {
+        None
+    };
+
     // iterate over each output and save the relevant info
     let print_delta = 100000;
     let mut solved_blocks = 0;
@@ -455,6 +462,11 @@ fn run_merge(settings: MergeSettings) {
             if let Err(e) = merged_writer.write_results(&region, &benchmark) {
                 error!("Error while writing merged VCF results: {e:#}");
                 std::process::exit(exitcode::IOERR);
+            }
+
+            // stat update if we're tracking that
+            if let Some(writer) = summary_writer.as_mut() {
+                writer.add_merge_benchmark(&region, &benchmark);
             }
 
             // stats this loop tracks
@@ -468,6 +480,15 @@ fn run_merge(settings: MergeSettings) {
         }
     }
     info!("Solved:error blocks: {solved_blocks} : {error_blocks}");
+
+    // now write things
+    if let Some(summary_fn) = settings.output_summary_filename.as_deref() {
+        info!("Saving output summary to {:?}...", summary_fn);
+        if let Err(e) = summary_writer.unwrap().write_summary(summary_fn, &settings.vcf_tags) {
+            error!("Error while saving summary file: {e:#}");
+            std::process::exit(exitcode::IOERR);
+        }
+    }
 
     // index the VCFs
     info!("Indexing all merged VCF files...");
