@@ -29,6 +29,7 @@ Required parameters:
 * `--output-vcfs <DIR>` - [Output merged VCF files](#output-vcf-folder) and supporting indices
 
 ## Additional options
+* `--output-summary <TSV>` - Creates a [merge summary file](#merge-summary-file) containing summary metrics on how many variants were in agreement from each source file.
 * `--merge-strategy <STRAT>` - Sets the merge strategy for the variants, which must be one of `exact`, `no_conflict`, `majority`, or `all`. See [Methods](./methods.md#merge-strategies) for details on each merge strategy.
 * `--conflict-select <INDEX>` - By default, any conflicting regions are not written to the output VCF and are marked as failed regions. This option will enable an input VCF to be selected instead of generating a failed region. The expected input is a 0-based index (e.g., "0" selects the first VCF input, "1" the second, etc.).
 * `--threads <THREADS>` - The number of compute threads to use for the comparison step
@@ -76,6 +77,48 @@ chr1	116549	.	C	T	.	.	SOURCES=pb,ont;MR=majority	GT:RI	1/1:5
 chr1	120458	.	T	C	.	.	SOURCES=pb,ilmn,ont;MR=identical	GT:RI	1/1:6
 chr1	120705	.	T	C	.	.	SOURCES=pb,ilmn,ont;MR=identical	GT:RI	1/1:7
 ...
+```
+
+## Merge summary file
+The merge summary file contains statistics on how many variants from each VCF file were included or excluded.
+The outputs are grouped by the merge reason, variant type, and VCF.
+
+### Fields
+* `merge_reason` - The merge reason assigned to the collection of variants. The label here will match the `MR` tag from the VCF files, but may have additional index information provided for clarity. For example, the `majority_0_2` label indicates variants the variants from input 0 and input 2 were in agreement and are thus "passing", but that input 1 had a different set of variants that were instead "failed".
+* `variant_type` - The variant type counted on the row
+* `vcf_index` - The 0-based index of the VCF counted on the row
+* `vcf_label` - The corresponding label (`--vcf-tag`) for the VCF
+* `pass_variants` - The total number of passing variants with the given `merge_reason`, `variant_type`, and `vcf_index`. "Passing" indicates that the variant is part of a region that is basepair-equivalent to the region in the merged VCF. It **does not** mean that the exact representation is in the merged VCF. By definition, the `different` merge reason will never have passing variants.
+* `fail_variants` - The total number of failing variants with the given `merge_reason`, `variant_type`, and `vcf_index`. "Failing" indicates that the variant is part of a region that is *not* basepair-equivalent to the region in the merged VCF. By definition, the `identical` and `no_conflict` merge reasons will never have failing variants.
+
+### Example
+This partial example only contains the "Snv" type for brevity:
+```
+merge_reason	variant_type	vcf_index	vcf_label	pass_variants	fail_variants
+different	Snv	0	pb	0	88072
+different	Snv	1	ilmn	0	51250
+different	Snv	2	ont	0	75279
+no_conflict_0	Snv	0	pb	26207	0
+no_conflict_0_1	Snv	0	pb	144889	0
+no_conflict_0_1	Snv	1	ilmn	144424	0
+no_conflict_0_2	Snv	0	pb	131610	0
+no_conflict_0_2	Snv	2	ont	131575	0
+no_conflict_1	Snv	1	ilmn	19896	0
+no_conflict_1_2	Snv	1	ilmn	13295	0
+no_conflict_1_2	Snv	2	ont	13290	0
+no_conflict_2	Snv	2	ont	44727	0
+majority_0_1	Snv	0	pb	153882	0
+majority_0_1	Snv	1	ilmn	150677	0
+majority_0_1	Snv	2	ont	0	111297
+majority_0_2	Snv	0	pb	40561	0
+majority_0_2	Snv	1	ilmn	0	37810
+majority_0_2	Snv	2	ont	40529	0
+majority_1_2	Snv	0	pb	0	16904
+majority_1_2	Snv	1	ilmn	17900	0
+majority_1_2	Snv	2	ont	18133	0
+identical	Snv	0	pb	3135228	0
+identical	Snv	1	ilmn	3132738	0
+identical	Snv	2	ont	3134498	0
 ```
 
 ## Debug folder

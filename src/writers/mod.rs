@@ -1,4 +1,6 @@
 
+/// Generates the summary file for merging
+pub mod merge_summary;
 /// Helper functions for indexing file
 pub mod noodles_idx;
 /// Generates a large sequence file; each line corresponds to a sub-region

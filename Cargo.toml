@@ -1,6 +1,6 @@
 [package]
 name = "aardvark"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "MIT"
 description = "Aardvark - A tool for sniffing out the differences in vari-Ants"
@@ -22,6 +22,7 @@ exitcode = "1.1.2"
 flate2 = "1.1.1"
 indexmap = "2.9.0"
 indicatif = {version = "0.17.11", features = ["rayon"]}
+itertools = "0.14.0"
 lazy_static = "1.5.0"
 log = "0.4.27"
 noodles = { version = "0.96.0", features = ["bed", "bgzf", "core", "tabix", "vcf"] }

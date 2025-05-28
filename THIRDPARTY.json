@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark",
-    "version": "0.5.2",
+    "version": "0.5.3",
     "authors": null,
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -686,6 +686,15 @@
   {
     "name": "itertools",
     "version": "0.11.0",
+    "authors": "bluss",
+    "repository": "https://github.com/rust-itertools/itertools",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Extra iterator adaptors, iterator methods, free functions, and macros."
+  },
+  {
+    "name": "itertools",
+    "version": "0.14.0",
     "authors": "bluss",
     "repository": "https://github.com/rust-itertools/itertools",
     "license": "Apache-2.0 OR MIT",
