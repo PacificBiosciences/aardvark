@@ -98,7 +98,7 @@ fn run_compare(settings: CompareSettings) {
 
     // build the region iterator
     info!("Generating regions to compare...");
-    let region_iter = match RegionIterator::new_compare_iterator(
+    let mut region_iter = match RegionIterator::new_compare_iterator(
         &settings.truth_vcf_filename,
         &settings.truth_sample,
         &settings.query_vcf_filename,
@@ -168,6 +168,15 @@ fn run_compare(settings: CompareSettings) {
             }
         }
     });
+
+    if settings.threads > 1 && !debug_run {
+        // we have parallelization and this is not a debug run, let's pre-load our variant for max efficiency
+        info!("Pre-loading all variants...");
+        if let Err(e) = region_iter.preload_all_variants() {
+            error!("Error while loading all variants into memory: {e:#}");
+            std::process::exit(exitcode::IOERR);
+        }
+    }
 
     // metrics to track as we iterate
     let mut joint_gt = SummaryMetrics::default();
@@ -354,7 +363,7 @@ fn run_merge(settings: MergeSettings) {
 
     // build the region iterator
     info!("Generating regions to merge...");
-    let region_iter = match RegionIterator::new_merge_iterator(
+    let mut region_iter = match RegionIterator::new_merge_iterator(
         &settings.vcf_filenames,
         &settings.vcf_samples,
         settings.merge_regions.as_deref(),
@@ -382,6 +391,15 @@ fn run_merge(settings: MergeSettings) {
 
     if debug_run {
         warn!("Skip is enabled, output make be truncated.");
+    }
+
+    if settings.threads > 1 && !debug_run {
+        // we have parallelization and this is not a debug run, let's pre-load our variant for max efficiency
+        info!("Pre-loading all variants...");
+        if let Err(e) = region_iter.preload_all_variants() {
+            error!("Error while loading all variants into memory: {e:#}");
+            std::process::exit(exitcode::IOERR);
+        }
     }
 
     // first pre-load all the regions we are comparing; this is currently single-threaded

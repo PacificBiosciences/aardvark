@@ -98,4 +98,16 @@ impl PhasedZygosity {
             PhasedZygosity::HomozygousAlternate => (Allele::Alternate, Allele::Alternate),
         }
     }
+
+    /// Returns the number of ALT alleles for this zygosity
+    pub fn to_allele_count(&self) -> u8 {
+        match self {
+            PhasedZygosity::Unknown |
+            PhasedZygosity::HomozygousReference => 0,
+            PhasedZygosity::UnphasedHeterozygous |
+            PhasedZygosity::PhasedHet01 |
+            PhasedZygosity::PhasedHet10 => 1,
+            PhasedZygosity::HomozygousAlternate => 2,
+        }
+    }
 }

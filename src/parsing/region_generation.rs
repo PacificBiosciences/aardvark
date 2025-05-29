@@ -8,9 +8,10 @@ use noodles::vcf::variant::record::samples::keys::key as vcf_key;
 use noodles_util::variant::io::IndexedReader as VcfReader;
 use noodles_util::variant::io::indexed_reader::Builder as VcfBuilder;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use rayon::prelude::*;
 
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::multi_region::MultiRegion;
@@ -18,13 +19,12 @@ use crate::data_types::phase_enums::PhasedZygosity;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::parsing::noodles_helper::LoadedBed;
 
+type VcfChromKey = (usize, usize);
 pub struct RegionIterator {
     /// Tracks the next block index
     next_region_id: u64,
-    /// Readers for the VCF files
-    vcf_readers: Vec<VcfReader<noodles::bgzf::Reader<File>>>,
-    /// Headers for the VCF files
-    vcf_headers: Vec<vcf::Header>,
+    /// The file paths to all input VCFs
+    vcf_paths: Vec<PathBuf>,
     /// Index of the samples in the VCFs
     vcf_sample_index: Vec<usize>,
     /// The current chromosome index
@@ -38,7 +38,9 @@ pub struct RegionIterator {
     /// Tracks the chromosome lengths
     chrom_lengths: HashMap<String, usize>,
     /// If true, changes output messages slightly
-    is_compare_iterator: bool
+    is_compare_iterator: bool,
+    /// Lookup from (vcf_index, chrom_index) to the list of variants with phases
+    preloaded_variants: Option<BTreeMap<VcfChromKey, Vec<(Variant, PhasedZygosity)>>>
 }
 
 impl RegionIterator {
@@ -95,15 +97,15 @@ impl RegionIterator {
         // everything opened fine at least
         Ok(Self {
             next_region_id: 0,
-            vcf_readers: vec![truth_vcf_reader, query_vcf_reader],
-            vcf_headers: vec![truth_vcf_header, query_vcf_header],
+            vcf_paths: vec![truth_vcf_fn.to_path_buf(), query_vcf_fn.to_path_buf()],
             vcf_sample_index: vec![truth_index, query_index],
             chrom_index: 0, // start with w/e the first chromosome is
             hc_bed_regions,
             region_queue: Default::default(),
             flank_size,
             chrom_lengths,
-            is_compare_iterator: true
+            is_compare_iterator: true,
+            preloaded_variants: None
         })
     }
 
@@ -125,10 +127,10 @@ impl RegionIterator {
         ensure!(!vcf_filenames.is_empty(), "Must provide at least 1 VCF to iterate on");
 
         // Prep our outputs
-        let mut vcf_readers = vec![];
-        let mut vcf_headers = vec![];
+        let mut vcf_paths = vec![];
         let mut vcf_sample_index = vec![];
 
+        // we want to open each file and do some sanity checks before going into iteration mode
         for (p, s) in vcf_filenames.iter().zip(sample_names.iter()) {
             // open the VCF reader
             let mut vr = VcfBuilder::default()
@@ -143,8 +145,8 @@ impl RegionIterator {
             let si = vh.sample_names().get_index_of(s.as_ref())
                 .ok_or(anyhow!("Sample name {s:?} was not found in {p:?}"))?;
 
-            vcf_readers.push(vr);
-            vcf_headers.push(vh);
+            // just save the VCF and the index in the VCF
+            vcf_paths.push(p.as_ref().to_path_buf());
             vcf_sample_index.push(si);
         }
 
@@ -164,16 +166,95 @@ impl RegionIterator {
         // everything opened fine at least
         Ok(Self {
             next_region_id: 0,
-            vcf_readers,
-            vcf_headers,
+            vcf_paths,
             vcf_sample_index,
             chrom_index: 0, // start with w/e the first chromosome is
             hc_bed_regions,
             region_queue: Default::default(),
             flank_size,
             chrom_lengths,
-            is_compare_iterator: false
+            is_compare_iterator: false,
+            preloaded_variants: None
         })
+    }
+
+    /// Triggers the region iterator to pre-load all of the variants into memory in parallel.
+    /// This is most useful in the typical run, where each chromosome and file can be loaded independently, and then mixed later.
+    /// # Errors
+    /// * if there are any VCF parsing errors
+    /// * if there are any variant/zygosity creation issues
+    pub fn preload_all_variants(&mut self) -> anyhow::Result<()> {
+        ensure!(self.chrom_index == 0, "Can only call preload if no chromosomes have been parsed");
+        ensure!(self.preloaded_variants.is_none(), "Cannot preload variants twice");
+
+        // figure out what the loads are, the key here is (vcf_index, chrom_index)
+        let mut load_keys: Vec<VcfChromKey> = vec![];
+        let mut full_chrom_regions: Vec<Region> = vec![];
+        let mut chrom_index = 0;
+        loop {
+            // check if there are more chromosomes
+            let opt_next_chrom = self.hc_bed_regions.get_index(chrom_index);
+            if opt_next_chrom.is_none() {
+                break;
+            }
+
+            // we have more, add each
+            let (chrom, intervals) = opt_next_chrom.unwrap();
+            ensure!(self.chrom_lengths.contains_key(chrom), "Chromosome {chrom} was not found in reference genome");
+
+            // add a load entry for each VCF
+            for i in 0..self.vcf_paths.len() {
+                load_keys.push((i, chrom_index));
+            }
+
+            // add an entry for the chromosome
+            let full_start = intervals[0].start().unwrap();
+            let full_end = intervals.last().unwrap().end().unwrap();
+
+            // build the region noodles will recognize
+            let chrom_region = Region::new(
+                chrom.clone(),
+                full_start..=full_end // Position here is 1-based
+            );
+            full_chrom_regions.push(chrom_region);
+
+            // increment so we get the next chromosome in the next loop
+            chrom_index += 1;
+        }
+
+        // sort them so they are clustered by VCF index
+        load_keys.sort();
+
+        // now pre-load all the variants in parallel
+        self.preloaded_variants = Some(load_keys.into_par_iter()
+            .map(|(vi, chrom_index)| {
+                // get the full chrom region
+                let full_chrom_region = &full_chrom_regions[chrom_index];
+
+                // open the reader, get the header
+                let vcf_path = self.vcf_paths[vi].as_path();
+                let mut vcf_reader = VcfBuilder::default()
+                    .build_from_path(vcf_path)
+                    .with_context(|| format!("Error while opening {vcf_path:?} (or associated index):"))?;
+                let vcf_header = vcf_reader.read_header()
+                    .with_context(|| format!("Error while reading header of {vcf_path:?}:"))?;
+
+                // we pre-identified the sample index
+                let vcf_index = self.vcf_sample_index[vi];
+
+                // load the variants into memory
+                match load_variants_in_region(
+                    &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region
+                ).with_context(|| format!("Error while pre-loading variants from input #{vi} in {full_chrom_region}:")) {
+                    Ok(v) => Ok(
+                        ((vi, chrom_index), v)
+                    ),
+                    Err(e) => Err(e)
+                }
+            })
+            .collect::<anyhow::Result<_>>()?);
+
+        Ok(())
     }
 }
 
@@ -194,7 +275,7 @@ impl Iterator for RegionIterator {
             };
             self.chrom_index += 1;
 
-            let num_input_vcfs = self.vcf_readers.len();
+            let num_input_vcfs = self.vcf_paths.len();
             let full_start = intervals[0].start().unwrap();
             let full_end = intervals.last().unwrap().end().unwrap();
 
@@ -204,21 +285,58 @@ impl Iterator for RegionIterator {
                 full_start..=full_end // Position here is 1-based
             );
 
-            debug!("Loading all variants in {full_chrom_region}...");
+            let joint_results: Vec<(usize, Vec<(Variant, PhasedZygosity)>)> = if let Some(preloaded_variants) = self.preloaded_variants.as_mut() {
+                // we have pre-loaded variants, pop them off of our preloaded Map and into this Vec for sorting
+                debug!("Collecting pre-loaded variants in {full_chrom_region}...");
+                let mut jr = vec![];
+                let chrom_index = self.chrom_index - 1; // already incremented above, so decrement here
+                for vcf_index in 0..self.vcf_paths.len() {
+                    jr.push(
+                        (vcf_index, preloaded_variants.remove(&(vcf_index, chrom_index)).unwrap())
+                    );
+                }
+                jr
+            } else {
+                // we did not pre-load, so the variants get loaded in parallel here
+                // in general, this is slower because we are only parallelizing by file
+                debug!("Loading all variants in {full_chrom_region}...");
+
+                // this is a parallelized variant loading loop
+                // we found that we can pass around the VCF file paths, but the VCF readers themselves do not Send
+                match self.vcf_paths.par_iter()
+                    .enumerate()
+                    .map(|(i, vcf_path)| {
+                        // open the reader, get the header
+                        let mut vcf_reader = VcfBuilder::default()
+                            .build_from_path(vcf_path)
+                            .with_context(|| format!("Error while opening {vcf_path:?} (or associated index):"))?;
+                        let vcf_header = vcf_reader.read_header()
+                            .with_context(|| format!("Error while reading header of {vcf_path:?}:"))?;
+
+                        // we pre-identified the sample index
+                        let vcf_index = self.vcf_sample_index[i];
+
+                        // load the variants into memory
+                        match load_variants_in_region(
+                            &vcf_header, &mut vcf_reader, vcf_index, &full_chrom_region
+                        ).with_context(|| format!("Error while parsing variants from input #{i} in {full_chrom_region}:")) {
+                            Ok(v) => Ok((i, v)),
+                            Err(e) => Err(e)
+                        }
+                    })
+                    .collect() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // translate the error into an option for main
+                            return Some(Err(e));
+                        }
+                    }
+            };
+
+            // variants were returned with an associated index, we want to push that onto each variant for sorting
             let mut joint_vec: Vec<(usize, Variant, PhasedZygosity)> = vec![];
-            for (i, vcf_reader) in self.vcf_readers.iter_mut().enumerate() {
-                // get the corresponding header and index
-                let vcf_header = &self.vcf_headers[i];
-                let vcf_index = self.vcf_sample_index[i];
-
-                // load the variants into memory
-                let pvariants = match load_variants_in_region(
-                    vcf_header, vcf_reader, vcf_index, &full_chrom_region
-                ).with_context(|| format!("Error while parsing variants from input #{i} in {full_chrom_region}:")) {
-                    Ok(pv) => pv,
-                    Err(e) => return Some(Err(e))
-                };
-
+            for (i, pvariants) in joint_results.into_iter() {
+                // output the number of variants found while we go
                 if self.is_compare_iterator {
                     if i == 0 {
                         info!("Loaded {} truth variants on {chrom}.", pvariants.len());
@@ -228,6 +346,8 @@ impl Iterator for RegionIterator {
                 } else {
                     info!("Loaded {} variants from input #{i} on {chrom}.", pvariants.len());
                 }
+
+                // extend our joint loop with the vcf index + variant + zygosity
                 joint_vec.extend(
                     pvariants.into_iter()
                         .map(|(v, p)| (i, v, p))
@@ -237,6 +357,7 @@ impl Iterator for RegionIterator {
             // ...which we sort by position
             joint_vec.sort_by_key(|(_b, v, _p)| v.position());
 
+            // ... and then convert into groups of variants for problem solving
             // convert to deque and iterate
             let mut joint_deque: VecDeque<(usize, Variant, PhasedZygosity)> = joint_vec.into();
             for interval in intervals.iter() {
