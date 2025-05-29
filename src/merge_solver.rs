@@ -1,4 +1,5 @@
 
+use anyhow::ensure;
 use derive_builder::Builder;
 use log::debug;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
@@ -6,6 +7,8 @@ use std::collections::BTreeSet;
 
 use crate::data_types::merge_benchmark::{MergeBenchmark, MergeClassification};
 use crate::data_types::multi_region::MultiRegion;
+use crate::data_types::phase_enums::PhasedZygosity;
+use crate::data_types::variants::Variant;
 use crate::query_optimizer::optimize_sequences;
 
 /// Controls what passes our merging process
@@ -48,6 +51,13 @@ pub fn solve_merge_region(problem: &MultiRegion, reference_genome: &ReferenceGen
 
     let reference = reference_genome.get_full_chromosome(coordinates.chrom());
 
+    // first, build up the delta values as a shortcut
+    let mut delta_scores = vec![];
+    for (variants, zygs) in problem.variants().iter().zip(problem.zygosity().iter()) {
+        delta_scores.push(variant_delta_length(variants, zygs)?);
+        // delta_scores.push(0);
+    }
+
     // do all the pair-wise comparisons
     let mut all_identical = true;
     let mut no_conflict = true;
@@ -58,23 +68,29 @@ pub fn solve_merge_region(problem: &MultiRegion, reference_genome: &ReferenceGen
             let v2 = &problem.variants()[j];
             let z2 = &problem.zygosity()[j];
 
-            // check the basepair level analysis
-            let all_opt_haps = optimize_sequences(
-                reference, coordinates, v1, z1, v2, z2
-            )?;
+            let exact_match = if delta_scores[i] == delta_scores[j] {
+                // check the basepair level analysis
+                let all_opt_haps = optimize_sequences(
+                    reference, coordinates, v1, z1, v2, z2
+                )?;
 
-            // we don't care which one is selected, we just want to check if the optimal score is ED=0
-            let basepair_analysis = &all_opt_haps[0];
-            
+                // we don't care which one is selected, we just want to check if the optimal score is ED=0
+                let basepair_analysis = &all_opt_haps[0];
+                basepair_analysis.is_exact_match()
+            } else {
+                // they have different number of inserted/deleted bases, impossible to be an exact match
+                false
+            };
+
             // handles the match category
-            all_identical &= basepair_analysis.is_exact_match();
+            all_identical &= exact_match;
 
             // IF either variant set is empty
             no_conflict &= v1.is_empty() || v2.is_empty() ||
                 // OR they exactly match, THEN there is no conflict present
-                basepair_analysis.is_exact_match();
+                exact_match;
 
-            if basepair_analysis.is_exact_match() {
+            if exact_match {
                 match_sets[i].insert(j);
                 match_sets[j].insert(i);
             }
@@ -115,6 +131,29 @@ pub fn solve_merge_region(problem: &MultiRegion, reference_genome: &ReferenceGen
     };
     
     Ok(MergeBenchmark::new(problem_id, classification))
+}
+
+/// Calculates the total size delta for a collection of variants and zygosities.
+/// For example, a 1 bp homozygous insertion would be +2, while a heterozygous 3 bp deletion would be -3.
+/// SNPs have no impact on length.
+/// # Arguments
+/// * `variants` - the set of variants
+/// * `zygosities` - the corresponding set of zygosities
+/// # Errors
+/// * if the number of variants and zygosities are not equal
+/// * if an unknown zygosity is provided
+pub fn variant_delta_length(variants: &[Variant], zygosities: &[PhasedZygosity]) -> anyhow::Result<i64> {
+    let mut total_delta = 0;
+    ensure!(variants.len() == zygosities.len(), "Variants and zygosities must be the same length");
+
+    for (v, z) in variants.iter().zip(zygosities.iter()) {
+        ensure!(*z != PhasedZygosity::Unknown, "Zygosity cannot be unknown");
+        let v_delta = v.allele1().len() as i64 - v.allele0().len() as i64;
+        let z_weight = z.to_allele_count() as i64;
+        total_delta += v_delta * z_weight;
+    }
+
+    Ok(total_delta)
 }
 
 #[cfg(test)]
@@ -240,5 +279,27 @@ mod tests {
 
         let result = solve_merge_region(&problem, &reference_genome, merge_config).unwrap();
         assert_eq!(result.merge_classification(), &MergeClassification::Different);
+    }
+
+    #[test]
+    fn test_variant_length_delta() {
+        let variants = [
+            Variant::new_snv(0, 10, b"A".to_vec(), b"C".to_vec()).unwrap(),
+            Variant::new_deletion(0, 12, b"ACGTACGT".to_vec(), b"A".to_vec()).unwrap(),
+            Variant::new_insertion(0, 25, b"A".to_vec(), b"ACC".to_vec()).unwrap()
+        ];
+        let zygs = [
+            PhasedZygosity::HomozygousAlternate,
+            PhasedZygosity::PhasedHet01,
+            PhasedZygosity::HomozygousAlternate,
+        ];
+
+        // test them individually
+        assert_eq!(variant_delta_length(&variants[0..1], &zygs[0..1]).unwrap(), 0);
+        assert_eq!(variant_delta_length(&variants[1..2], &zygs[1..2]).unwrap(), -7);
+        assert_eq!(variant_delta_length(&variants[2..3], &zygs[2..3]).unwrap(), 4);
+
+        // test them combined
+        assert_eq!(variant_delta_length(&variants, &zygs).unwrap(), -3);
     }
 }

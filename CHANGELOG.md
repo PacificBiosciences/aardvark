@@ -1,3 +1,8 @@
+# v0.5.4
+## Changes
+- Added a short-circuit in the `merge` routine that checks variant lengths prior to trying a full comparison. This reduces run-time significantly when larger events are unique to an input.
+- Adds parallelization to the file loading for both `compare` and `merge`. The parallelization is across both file and chromosome for the typical process, significantly reducing initially variant loading times.
+
 # v0.5.3
 ## Changes
 - Added a new optional output file for merging (`--output-summary`) which contains statistics on the merge. See documentation for details.
