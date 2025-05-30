@@ -1,5 +1,5 @@
 
-use indicatif::{ParallelProgressIterator, ProgressState, ProgressStyle};
+use indicatif::ParallelProgressIterator;
 use log::{LevelFilter, debug, error, info, warn};
 use rayon::prelude::*;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
@@ -16,6 +16,7 @@ use aardvark::data_types::summary_metrics::SummaryMetrics;
 use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
 use aardvark::parsing::region_generation::RegionIterator;
 use aardvark::util::json_io::save_json;
+use aardvark::util::progress_bar::get_progress_style;
 use aardvark::waffle_solver::solve_compare_region;
 use aardvark::writers::merge_summary::MergeSummaryWriter;
 use aardvark::writers::region_sequence::RegionSequenceWriter;
@@ -103,7 +104,7 @@ fn run_compare(settings: CompareSettings) {
         &settings.truth_sample,
         &settings.query_vcf_filename,
         &settings.query_sample,
-        settings.confidence_regions.as_deref(),
+        settings.regions.as_deref(),
         &reference_genome,
         settings.min_variant_gap
     ) {
@@ -516,15 +517,6 @@ fn run_merge(settings: MergeSettings) {
     }
 
     info!("Merge completed in {} seconds.", start_time.elapsed().as_secs_f64());
-}
-
-/// Shared function to pull our progress bar styling
-fn get_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}); ETA: {eta_precise}; Speed: {per_sec} {msg}")
-        .unwrap()
-        .with_key("percent", |state: &ProgressState, w: &mut dyn std::fmt::Write| write!(w, "{:.1}%", state.fraction()*100.0).unwrap())
-        .with_key("per_sec", |state: &ProgressState, w: &mut dyn std::fmt::Write| write!(w, "{:.0}/s", state.per_sec()).unwrap())
-        .progress_chars("##-")
 }
 
 fn main() {

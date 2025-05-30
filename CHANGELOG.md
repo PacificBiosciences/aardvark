@@ -1,3 +1,11 @@
+# v0.6.0
+## Changes
+- In `compare` mode, the `--confidence-regions` parameter has been replaced with `--regions` for consistency.
+- The progress bar has been added to the parallelized variant loading step.
+
+## Fixed
+- Fixed an issue where variants that were hemizygous would be ignored entirely. They are now treated as homozygous variants for comparison.
+
 # v0.5.4
 ## Changes
 - Added a short-circuit in the `merge` routine that checks variant lengths prior to trying a full comparison. This reduces run-time significantly when larger events are unique to an input.
