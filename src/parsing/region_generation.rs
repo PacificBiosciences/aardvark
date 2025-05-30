@@ -1,5 +1,6 @@
 
 use anyhow::{anyhow, bail, ensure, Context};
+use indicatif::ParallelProgressIterator;
 use log::{debug, info, trace};
 use noodles::core::region::Interval;
 use noodles::core::Region;
@@ -18,6 +19,7 @@ use crate::data_types::multi_region::MultiRegion;
 use crate::data_types::phase_enums::PhasedZygosity;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::parsing::noodles_helper::LoadedBed;
+use crate::util::progress_bar::get_progress_style;
 
 type VcfChromKey = (usize, usize);
 pub struct RegionIterator {
@@ -226,7 +228,9 @@ impl RegionIterator {
         load_keys.sort();
 
         // now pre-load all the variants in parallel
+        let style = get_progress_style();
         self.preloaded_variants = Some(load_keys.into_par_iter()
+            .progress_with_style(style)
             .map(|(vi, chrom_index)| {
                 // get the full chrom region
                 let full_chrom_region = &full_chrom_regions[chrom_index];
@@ -524,7 +528,7 @@ fn parse_variant(
     trace!("{chrom}\t{pos}\t{ref_seq:?}\t{alts:?}\tGT={gt:?}");
 
     // parse the genotype
-    let genotypes = parse_genotype(gt);
+    let genotypes = parse_genotype(gt)?;
     
     // go through the genotypes we found and convert them into Variants
     let mut ret = vec![];
@@ -553,54 +557,58 @@ fn parse_variant(
 /// Multiple returns values are possible if multiple ALTs are part of the genotype.
 /// # Arguments
 /// * `gt` - the GT field from the record
-fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> Vec<(usize, PhasedZygosity)> {
+fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> anyhow::Result<Vec<(usize, PhasedZygosity)>> {
     use vcf::variant::record::samples::series::value::genotype::Phasing;
 
     let mut ret = vec![];
     if let vcf::variant::record_buf::samples::sample::Value::Genotype(genotype) = gt {
         let alleles = genotype.as_ref();
-        if alleles.len() == 2 {
-            let a1 = alleles[0].position();
-            let a2 = alleles[1].position();
 
-            if let (Some(i1), Some(i2)) = (a1, a2) {
-                // both have an index set
-                if i1 == i2 {
-                    // homozygous path
-                    if i1 == 0 {
-                        // homozygous reference
-                    } else {
-                        // homozygous alternate
-                        ret.push((i1, PhasedZygosity::HomozygousAlternate))
-                    }
-                } else {
-                    // heterozygous, figure out if they're phased
-                    let p1 = alleles[0].phasing();
-                    let p2 = alleles[1].phasing();
-                    let is_phased = p1 == Phasing::Phased || p2 == Phasing::Phased;
+        // figure out the indices
+        let (a1, a2) = match alleles.len() {
+            // treats hemi-zygous as homozygous
+            // TODO: do we want a special hemizygous state? how do we score that?
+            1 => (alleles[0].position(), alleles[0].position()),
+            2 => (alleles[0].position(), alleles[1].position()),
+            _ => bail!("allele.len() != [1, 2]: {gt:?}")
+        };
 
-                    // now build the phase enum for the variant
-                    let ap1 = if is_phased { PhasedZygosity::PhasedHet10 } else { PhasedZygosity::UnphasedHeterozygous };
-                    let ap2 = if is_phased { PhasedZygosity::PhasedHet01 } else { PhasedZygosity::UnphasedHeterozygous };
+        // if it's None ('.'), we treat it as a reference ('0') call
+        let i1 = a1.unwrap_or(0);
+        let i2 = a2.unwrap_or(0);
 
-                    // save them if non-reference
-                    if i1 != 0 {
-                        ret.push((i1, ap1));
-                    }
-                    if i2 != 0 {
-                        ret.push((i2, ap2));
-                    }
-                }
+        // both have an index set
+        if i1 == i2 {
+            // homozygous path
+            if i1 == 0 {
+                // homozygous reference
             } else {
-                // one is missing, just set to nothing
+                // homozygous alternate
+                ret.push((i1, PhasedZygosity::HomozygousAlternate))
             }
         } else {
-            // we have alleles != 2
+            // heterozygous, figure out if they're phased
+            let p1 = alleles[0].phasing();
+            let p2 = alleles[1].phasing();
+            let is_phased = p1 == Phasing::Phased || p2 == Phasing::Phased;
+
+            // now build the phase enum for the variant
+            let ap1 = if is_phased { PhasedZygosity::PhasedHet10 } else { PhasedZygosity::UnphasedHeterozygous };
+            let ap2 = if is_phased { PhasedZygosity::PhasedHet01 } else { PhasedZygosity::UnphasedHeterozygous };
+
+            // save them if non-reference
+            if i1 != 0 {
+                ret.push((i1, ap1));
+            }
+            if i2 != 0 {
+                ret.push((i2, ap2));
+            }
         }
     } else {
-        // it's not a Genotype; should we throw an error?   
+        // it's not a Genotype; should we throw an error?
+        bail!("Non-genotype value provided to parse_genotype: {gt:?}");
     }
-    ret
+    Ok(ret)
 }
 
 /// Given a record, this will extract the type of the variant contained

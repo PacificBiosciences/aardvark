@@ -43,10 +43,10 @@ pub struct CompareSettings {
 
     /// Confidence regions (BED)
     #[clap(short = 'b')]
-    #[clap(long = "confidence-regions")]
+    #[clap(long = "regions")]
     #[clap(value_name = "BED")]
     #[clap(help_heading = Some("Input/Output"))]
-    pub confidence_regions: Option<PathBuf>,
+    pub regions: Option<PathBuf>,
 
     /// Output directory containing summary and VCFs
     #[clap(required = true)]
@@ -135,7 +135,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     check_required_filename(&settings.reference_fn, "Reference FASTA")?;
     check_required_filename(&settings.truth_vcf_filename, "Truth VCF")?;
     check_required_filename(&settings.query_vcf_filename, "Query VCF")?;
-    check_optional_filename(settings.confidence_regions.as_deref(), "Confidence regions")?;
+    check_optional_filename(settings.regions.as_deref(), "Regions")?;
     
     // dump stuff to the logger
     info!("\tReference: {:?}", &settings.reference_fn);
@@ -149,10 +149,10 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         settings.query_sample = get_vcf_sample_name(&settings.query_vcf_filename, 0)?;
     }
     info!("\tQuery sample: {:?}", &settings.query_sample);
-    if let Some(hcr_fn) = settings.confidence_regions.as_deref() {
-        info!("\tConfidence regions: {hcr_fn:?}");
+    if let Some(hcr_fn) = settings.regions.as_deref() {
+        info!("\tRegions: {hcr_fn:?}");
     } else {
-        info!("\tConfidence regions: None");
+        info!("\tRegions: None");
     }
 
     // 0 is just a sentinel for everything
