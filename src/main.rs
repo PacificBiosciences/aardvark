@@ -1,5 +1,6 @@
 
-use indicatif::ParallelProgressIterator;
+use aardvark::parsing::stratifications::Stratifications;
+use indicatif::{ParallelProgressIterator, ProgressIterator};
 use log::{LevelFilter, debug, error, info, warn};
 use rayon::prelude::*;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
@@ -97,23 +98,17 @@ fn run_compare(settings: CompareSettings) {
         }
     };
 
-    // build the region iterator
-    info!("Generating regions to compare...");
-    let mut region_iter = match RegionIterator::new_compare_iterator(
-        &settings.truth_vcf_filename,
-        &settings.truth_sample,
-        &settings.query_vcf_filename,
-        &settings.query_sample,
-        settings.regions.as_deref(),
-        &reference_genome,
-        settings.min_variant_gap
-    ) {
-        Ok(ri) => ri,
-        Err(e) => {
-            error!("Error while building region iterator: {e:#}");
-            std::process::exit(exitcode::IOERR);
+    // load any stratifications also
+    let stratifications = settings.stratifications.as_deref().map(|strat_fn| {
+        info!("Pre-loading stratifications into memory...");
+        match Stratifications::from_tsv_batch(strat_fn)  {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Error while loading stratifications: {e:#}");
+                std::process::exit(exitcode::IOERR);
+            }
         }
-    };
+    });
 
     // check if we're in debug mode
     let skip_count = settings.skip_blocks;
@@ -132,7 +127,9 @@ fn run_compare(settings: CompareSettings) {
     }
 
     // prep any writer accumulators
-    let mut summary_writer = SummaryWriter::new(settings.compare_label.clone());
+    let mut summary_writer = SummaryWriter::new(
+        settings.compare_label.clone(), stratifications.as_ref()
+    );
 
     info!("Opening output VCF files...");
     let mut vcf_writer = match VariantCategorizer::new(
@@ -169,6 +166,24 @@ fn run_compare(settings: CompareSettings) {
             }
         }
     });
+
+    // build the region iterator
+    info!("Generating regions to compare...");
+    let mut region_iter = match RegionIterator::new_compare_iterator(
+        &settings.truth_vcf_filename,
+        &settings.truth_sample,
+        &settings.query_vcf_filename,
+        &settings.query_sample,
+        settings.regions.as_deref(),
+        &reference_genome,
+        settings.min_variant_gap
+    ) {
+        Ok(ri) => ri,
+        Err(e) => {
+            error!("Error while building region iterator: {e:#}");
+            std::process::exit(exitcode::IOERR);
+        }
+    };
 
     if settings.threads > 1 && !debug_run {
         // we have parallelization and this is not a debug run, let's pre-load our variant for max efficiency
@@ -213,7 +228,9 @@ fn run_compare(settings: CompareSettings) {
         .progress_with_style(style)
         .map(|region| {
             debug!("region = {region:?}");
-            let comparison = match solve_compare_region(&region, &reference_genome, region_seq_writer.is_some()) {
+            let comparison = match solve_compare_region(
+                &region, &reference_genome, region_seq_writer.is_some(), stratifications.as_ref()
+            ) {
                 Ok(r) => Some(r),
                 Err(e) => {
                     error!("Error while solving compare region #{} ({}): {e:#}", region.region_id(), region.coordinates());
@@ -230,8 +247,8 @@ fn run_compare(settings: CompareSettings) {
     info!("Region comparisons complete, saving all outputs...");
 
     // now save all our result outputs
-    let print_delta = 100000;
-    for (region, opt_comparison) in all_results.into_iter() {
+    let style = get_progress_style();
+    for (region, opt_comparison) in all_results.into_iter().progress_with_style(style) {
         if let Some(comparison) = opt_comparison {
             // writer updates
             summary_writer.add_comparison_benchmark(&comparison);
@@ -261,10 +278,6 @@ fn run_compare(settings: CompareSettings) {
             solved_blocks += 1;
         } else {
             error_blocks += 1;
-        }
-
-        if region.region_id() % print_delta == 0 {
-            info!("Last written block: B#{} {}", region.region_id(), region.coordinates());
         }
     }
 
@@ -472,10 +485,10 @@ fn run_merge(settings: MergeSettings) {
     };
 
     // iterate over each output and save the relevant info
-    let print_delta = 100000;
     let mut solved_blocks = 0;
     let mut error_blocks = 0;
-    for (region, opt_benchmark) in all_results.into_iter() {
+    let style = get_progress_style();
+    for (region, opt_benchmark) in all_results.into_iter().progress_with_style(style) {
         if let Some(benchmark) = opt_benchmark {
             // writer updates
             if let Err(e) = merged_writer.write_results(&region, &benchmark) {
@@ -492,10 +505,6 @@ fn run_merge(settings: MergeSettings) {
             solved_blocks += 1;
         } else {
             error_blocks += 1;
-        }
-
-        if region.region_id() % print_delta == 0 {
-            info!("Last written block: B#{} {}", region.region_id(), region.coordinates());
         }
     }
     info!("Solved:error blocks: {solved_blocks} : {error_blocks}");

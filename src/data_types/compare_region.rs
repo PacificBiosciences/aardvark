@@ -58,6 +58,21 @@ impl CompareRegion {
         })
     }
 
+    /// This will return the coordinates containing all of the truth and query variants.
+    /// It should always be a subset of `coordinates` if the inputs are valid.
+    pub fn var_coordinates(&self) -> Coordinates {
+        let chrom = self.coordinates.chrom().to_string();
+        let min_truth = self.truth_variants.first().map(|v| v.position()).unwrap_or(u64::MAX);
+        let min_query = self.query_variants.first().map(|v| v.position()).unwrap_or(u64::MAX);
+        let start = min_truth.min(min_query);
+
+        let max_truth = self.truth_variants.last().map(|v| v.position() + v.ref_len() as u64).unwrap_or(u64::MIN);
+        let max_query = self.query_variants.last().map(|v| v.position() + v.ref_len() as u64).unwrap_or(u64::MIN);
+        let end = max_truth.max(max_query);
+
+        Coordinates::new(chrom, start, end)
+    }
+
     // various getters
     pub fn region_id(&self) -> u64 {
         self.region_id

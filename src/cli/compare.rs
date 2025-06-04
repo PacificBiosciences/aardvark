@@ -48,6 +48,13 @@ pub struct CompareSettings {
     #[clap(help_heading = Some("Input/Output"))]
     pub regions: Option<PathBuf>,
 
+    /// Stratifications
+    #[clap(short = 's')]
+    #[clap(long = "stratification")]
+    #[clap(value_name = "TSV")]
+    #[clap(help_heading = Some("Input/Output"))]
+    pub stratifications: Option<PathBuf>,
+
     /// Output directory containing summary and VCFs
     #[clap(required = true)]
     #[clap(short = 'o')]
@@ -136,6 +143,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     check_required_filename(&settings.truth_vcf_filename, "Truth VCF")?;
     check_required_filename(&settings.query_vcf_filename, "Query VCF")?;
     check_optional_filename(settings.regions.as_deref(), "Regions")?;
+    check_optional_filename(settings.stratifications.as_deref(), "Stratifications")?;
     
     // dump stuff to the logger
     info!("\tReference: {:?}", &settings.reference_fn);
@@ -153,6 +161,11 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         info!("\tRegions: {hcr_fn:?}");
     } else {
         info!("\tRegions: None");
+    }
+    if let Some(filename) = settings.stratifications.as_deref() {
+        info!("\tStratifications: {filename:?}");
+    } else {
+        info!("\tStratifications: None");
     }
 
     // 0 is just a sentinel for everything

@@ -2,6 +2,7 @@
 use anyhow::bail;
 use std::collections::BTreeMap;
 
+use crate::data_types::grouped_metrics::GroupMetrics;
 use crate::data_types::summary_metrics::SummaryMetrics;
 use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
 use crate::data_types::variants::{Variant, VariantType};
@@ -38,6 +39,9 @@ pub struct CompareBenchmark {
     /// optional sequence bundle, this can use a lot of memory
     sequence_bundle: Option<SequenceBundle>,
 
+    /// optional containment regions which share an index with the Stratifications, this often has 20+ entries in the GIAB test data
+    containment_regions: Option<Vec<usize>>
+
     // TODO: phasing stats, if we care to report it
 }
 
@@ -63,6 +67,7 @@ impl CompareBenchmark {
             truth_variant_data: Default::default(),
             query_variant_data: Default::default(),
             sequence_bundle: None,
+            containment_regions: None
         }
     }
 
@@ -222,11 +227,24 @@ impl CompareBenchmark {
         self.sequence_bundle = Some(sequence_bundle);
     }
 
+    /// Adds the annotated containment regions for this set
+    pub fn add_containment_regions(&mut self, containment_regions: Vec<usize>) {
+        self.containment_regions = Some(containment_regions);
+    }
+
     // wrappers that are useful for summaries
     /// Total edit distance: if 0, then it means both haplotypes exactly match *a* path in the graph.
     /// Note that this does not mean the genotypes are perfect.
     pub fn total_ed(&self) -> usize {
         self.bm_edit_distance_h1 + self.bm_edit_distance_h2
+    }
+
+    /// Utility function that creates the grouped metrics for us by copying out of this benchmark.
+    pub fn group_metrics(&self) -> GroupMetrics {
+        GroupMetrics::new(
+            self.bm_gt, self.bm_hap, self.bm_basepair,
+            self.variant_gt.clone(), self.variant_hap.clone(), self.variant_basepair.clone()
+        )
     }
 
     // getters
@@ -268,6 +286,10 @@ impl CompareBenchmark {
 
     pub fn sequence_bundle(&self) -> Option<&SequenceBundle> {
         self.sequence_bundle.as_ref()
+    }
+
+    pub fn containment_regions(&self) -> Option<&[usize]> {
+        self.containment_regions.as_deref()
     }
 }
 
