@@ -31,6 +31,8 @@ struct RegionSummaryRow {
     truth_tp: u64,
     /// Total number of false negatives
     truth_fn: u64,
+    /// Total number of variants in the query set
+    query_total: u64,
     /// Total number of true positives in query
     query_tp: u64,
     /// Total number of false positives
@@ -53,6 +55,7 @@ impl RegionSummaryRow {
             truth_total: metrics.truth_tp + metrics.truth_fn,
             truth_tp: metrics.truth_tp,
             truth_fn: metrics.truth_fn,
+            query_total: metrics.query_tp + metrics.query_fp,
             query_tp: metrics.query_tp,
             query_fp: metrics.query_fp,
             metric_recall: metrics.recall(),

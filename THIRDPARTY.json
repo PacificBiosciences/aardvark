@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "authors": null,
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -295,6 +295,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Minimal, flexible command line parser"
+  },
+  {
+    "name": "coitrees",
+    "version": "0.4.0",
+    "authors": "Daniel C. Jones <djones3@fredhutch.org>",
+    "repository": "https://github.com/dcjones/coitrees",
+    "license": null,
+    "license_file": "LICENSE",
+    "description": "A very fast data structure for overlap queries on sets of intervals."
   },
   {
     "name": "colorchoice",

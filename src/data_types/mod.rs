@@ -5,6 +5,8 @@ pub mod compare_benchmark;
 pub mod compare_region;
 /// Wrapper for coordinates with some additional functionalities
 pub mod coordinates;
+/// Wrapper containing SummaryMetrics for GT, HAP, BASEPAIR, and the variant-level metrics
+pub mod grouped_metrics;
 /// Contains merging benchmark results for VCF merging
 pub mod merge_benchmark;
 /// Contains comparison regions for multiple inputs, which serve as a sub-unit for solving

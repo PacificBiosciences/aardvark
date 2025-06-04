@@ -10,6 +10,7 @@ Table of contents:
   * [Summary statistics file](#summary-statistics-file)
   * [Labeled VCF files](#labeled-vcf-files)
   * [Debug folder](#debug-folder)
+* [Complex inputs](#complex-inputs)
 * [Frequently asked questions](#frequently-asked-questions)
 
 # Quickstart
@@ -33,6 +34,7 @@ Required parameters:
 * `--threads <THREADS>` - The number of compute threads to use for the comparison step
 * `--output-debug <DIR>` - Creates a [debug folder](#debug-folder) and populates it with more detailed statistics from the comparison
 * `--truth-sample <SAMPLE>` and `--query-sample <SAMPLE>` - Allows for the specification of the truth or query sample name in the provided VCF. This is usually only needed when they are multi-sample VCFs.
+* `--stratifications` - The root TSV file for a stratification. See [stratifications](#stratifications) for details.
 
 # Output files
 ## Summary statistics file
@@ -41,7 +43,8 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 ### Fields
 * `compare_label` - A user-provided comparison label that is just passed through to this output. Specified via `--compare-label` option.
 * `comparison` - The comparison type, which will be one of `GT` (genotype), `HAP` (haplotype), or `BASEPAIR` (sequence/basepair level). See [methods](./methods.md#comparison-types) for more details on each comparison type.
-* `filter` - Indicates if any filter was applied. `ALL` means no filter.
+* `filter` - Indicates if any filter was applied.
+* `region_label` - The region label from stratification inputs. By default, only `ALL` is provided which contains all variants analyzed. If [stratifications](#stratifications) are provided, then additional rows for each stratification label will be added and this column will contain the label.
 * `variant_type` - The type of variant that the assessment corresponds to.
   * `Snv` - Single Nucleotide Variant, requires both REF and ALT to be exactly 1 bp
   * `Insertion` - Insertion variant, required REF to be exactly 1 bp and ALT to be >1 bp
@@ -52,6 +55,7 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 * `truth_total` - The total number of truth values that were assessed.
 * `truth_tp` - The number of truth values that were also identified in the query set, indicating a true positive (TP).
 * `truth_fn` - The number of truth values that were not identified in the query set, indicating a false negative (FN).
+* `query_total` - The total number of query values that were assessed.
 * `query_tp` - The number of query values that were matched to the truth set, indicating TP. For `comparison` mode `BASEPAIR`, this value should be equal to `truth_tp`. Other modes may be different due to variant representation.
 * `query_fp` - The number of query values that were not matched to the truth set, indicating a false positive (FP).
 * `metric_recall` - The recall metric, which is calculated as `truth_tp / truth_total`.
@@ -62,13 +66,13 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 This snippet of the summary file shows the `GT` and `BASEPAIR` comparison types, filtered to `ALL`, `Snv`, and `JointIndel` variant types.
 
 ```
-compare_label	comparison	filter	variant_type	truth_total	truth_tp	truth_fn	query_tp	query_fp	metric_recall	metric_precision	metric_f1
-compare	GT	ALL	ALL	3751362	3745028	6334	3748188	7595	0.9983115465796156	0.99797778519153	0.9981446379846413
-compare	GT	ALL	Snv	3256124	3254700	1424	3257722	3145	0.9995626702177189	0.999035532574619	0.9992990318789207
-compare	GT	ALL	JointIndel	495238	490328	4910	490466	4450	0.9900855750164568	0.9910085751925579	0.9905468600896569
-compare	BASEPAIR	ALL	ALL	12661720	12643739	17981	12643739	15109	0.9985798927791801	0.9988064474745253	0.9986931572783044
-compare	BASEPAIR	ALL	Snv	9087880	9085376	2504	9091324	5872	0.9997244681928018	0.999354526383734	0.9995394630582695
-compare	BASEPAIR	ALL	JointIndel	3587426	3570969	16457	3568527	9275	0.995412588301473	0.9974076262465056	0.9964091086449175
+compare_label	comparison	region_label	filter	variant_type	truth_total	truth_tp	truth_fn	query_total	query_tp	query_fp	metric_recall	metric_precision	metric_f1
+compare	GT	ALL	ALL	ALL	3751311	3737771	13540	3757515	3741335	16180	0.9963905951812579	0.9956939626322183	0.9960421571004356
+compare	GT	ALL	ALL	Snv	3256086	3250157	5929	3256468	3252130	4338	0.9981791021490218	0.9986678818892125	0.9984234321984007
+compare	GT	ALL	ALL	JointIndel	495225	487614	7611	501047	489205	11842	0.9846312282295926	0.9763654906625526	0.980480939116689
+compare	BASEPAIR	ALL	ALL	ALL	12661262	12624128	37134	12657970	12624128	33842	0.9970671170061879	0.997326427539329	0.9971967554150142
+compare	BASEPAIR	ALL	ALL	Snv	9087802	9075500	12302	9087548	9080279	7269	0.9986463173383399	0.9992001142662466	0.9989231390468849
+compare	BASEPAIR	ALL	ALL	JointIndel	3587078	3561871	25207	3585212	3562195	23017	0.9929728319261527	0.9935800170254925	0.9932763316834902
 ```
 
 ## Labeled VCF files
@@ -154,6 +158,20 @@ region_id	coordinates	comparison	truth_total	truth_tp	truth_fn	query_tp	query_fp
 1	chr1:783125-783225	BASEPAIR	4	4	0	4	0	1.0	1.0	1.0
 ...
 ```
+
+# Complex inputs
+## Stratifications
+Sometimes it is useful to stratify the results into known regions for further analysis.
+Aardvark accepts the stratification format [supported by Hap.py](https://github.com/Illumina/hap.py/blob/master/doc/happy.md#stratification-via-bed-regions) and distributed by [Genome in a Bottle](https://github.com/genome-in-a-bottle/genome-stratifications).
+In short, the `--stratifications` parameter accepts the "root" TSV from the stratification, where each row contains a label and corresponding BED file.
+This file-of-files may contain paths relative to the root TSV, and those BED files may be gzip-compressed.
+A short example is in our [test files](../test_data/example_stratification/strat.tsv), and a real example is available through [GIAB](https://github.com/genome-in-a-bottle/genome-stratifications/blob/master/GRCh38/v3.1-GRCh38-all-stratifications.tsv).
+
+Aardvark takes a haplotype-centric approach to all analysis, including stratification.
+This means Aardvark compares the entire region against the stratifications when determining labels.
+Most variants in a typical benchmark are isolated, so for those variants Aardvark will just check if the reference bases are fully-contained within the stratification regions.
+If two or more variants are located in the same Aardvark region, it instead checks if the bases from the start of the first variant through the end of the last variant are fully-contained.
+As a result, stratification regions that are small and co-located with increased variation may be under-reported in the stratifications.
 
 # Frequently asked questions
 ## Which comparison mode is most like existing benchmark tools?

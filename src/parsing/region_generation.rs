@@ -533,6 +533,11 @@ fn parse_variant(
     // go through the genotypes we found and convert them into Variants
     let mut ret = vec![];
     for (alt_index, zygosity) in genotypes.into_iter() {
+        if alts[alt_index-1].as_bytes() == b"*" {
+            // this is effectively a reference allele
+            continue;
+        }
+
         let ref_sequence = ref_seq.as_bytes().to_vec();
         let alt_sequence = alts[alt_index-1].as_bytes().to_vec();
         let position = (pos.get() - 1) as u64; // convert to 0-based

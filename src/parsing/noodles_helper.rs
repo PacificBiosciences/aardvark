@@ -86,6 +86,11 @@ impl LoadedBed {
     pub fn get_index(&self, index: usize) -> Option<(&String, &Vec<Interval>)> {
         self.chrom_lookup.get_index(index)
     }
+
+    // getters
+    pub fn chrom_lookup(&self) -> &IndexMap<String, Vec<Interval>> {
+        &self.chrom_lookup
+    }
 }
 
 /// This will open a VCF file and retrieve the sample name at the given index

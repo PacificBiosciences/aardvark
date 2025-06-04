@@ -10,6 +10,7 @@ use crate::data_types::phase_enums::{Allele, Haplotype, PhasedZygosity};
 use crate::data_types::summary_metrics::SummaryMetrics;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::exact_gt_optimizer::optimize_gt_alleles;
+use crate::parsing::stratifications::Stratifications;
 use crate::query_optimizer::{optimize_sequences, OptimizedHaplotypes};
 use crate::util::sequence_alignment::wfa_ed;
 
@@ -26,7 +27,9 @@ const SUPPORTED_VARIANT_TYPES: [VariantType; 4] = [
 /// * `problem` - core problem that we want to do the comparison on
 /// * `reference_genome` - shared pre-loaded reference genome, intended to be provided from Arc<ReferenceGenome> reference in parallelization
 /// * `enable_sequences` - if True, saves the haplotype sequences which may consume more memory than normal
-pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &ReferenceGenome, enable_sequences: bool) -> anyhow::Result<CompareBenchmark> {
+pub fn solve_compare_region(
+    problem: &CompareRegion, reference_genome: &ReferenceGenome, enable_sequences: bool, stratifications: Option<&Stratifications>
+) -> anyhow::Result<CompareBenchmark> {
     // pull out core components from the problem space
     let problem_id = problem.region_id();
     let coordinates = problem.coordinates();
@@ -52,6 +55,23 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
     )?;
     debug!("B#{problem_id} Found {} equal solutions, scoring by ALT flips...", all_optimized_haplotypes.len());
 
+    let containment_regions = if let Some(strat) = stratifications {
+        // get variant coordinates and convert into 0-based inclusive
+        let var_coor = problem.var_coordinates();
+        let first: i32 = var_coor.start().try_into()
+            .with_context(|| format!("Failed to convert coordinates: {var_coor:?}"))?;
+        let last: i32 = var_coor.end().try_into()
+            .with_context(|| format!("Failed to convert coordinates: {var_coor:?}"))?;
+        assert!(first < last);
+
+        let containment_regions = strat.containments(
+            var_coor.chrom(), first, last - 1
+        );
+        Some(containment_regions)
+    } else {
+        None
+    };
+
     let mut best_results = vec![];
     for optimized_haplotypes in all_optimized_haplotypes.into_iter() {
         // check if the sequences are identical with 0 errors and 0 skipped variants
@@ -76,6 +96,10 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
                     String::from_utf8(optimized_haplotypes.query_seq2().to_vec())?,
                 );
                 exact_result.add_sequence_bundle(bundle);
+            }
+
+            if let Some(cr) = containment_regions {
+                exact_result.add_containment_regions(cr);
             }
 
             return Ok(exact_result);
@@ -153,6 +177,11 @@ pub fn solve_compare_region(problem: &CompareRegion, reference_genome: &Referenc
 
     // now add all the basepair-level stats
     add_basepair_stats(problem, reference_genome, &mut truth_stats, &optimized_haplotypes)?;
+
+    // add in the containment regions if we have them
+    if let Some(cr) = containment_regions {
+        truth_stats.add_containment_regions(cr);
+    }
 
     // add in the
     Ok(truth_stats)
@@ -713,7 +742,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
@@ -757,7 +786,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1}); // two variants here
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1});
@@ -803,7 +832,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2}); // only one variant in truth set
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2});
@@ -847,7 +876,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1}); // only one variant in truth set
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 2}); // but two haplotype variants
@@ -882,7 +911,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 1); // 1 BP ed
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
@@ -927,7 +956,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 2); // two BP delta
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 2});
@@ -974,7 +1003,7 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 1); // path through graph is an exact match still
         assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 1, truth_fn: 1, query_tp: 1});
         assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 1, truth_fn: 1, query_tp: 1});
@@ -1013,7 +1042,7 @@ mod tests {
         let problem = CompareRegion::new(
             0, region, variants.clone(), zygosities.clone(), variants, zygosities
         ).unwrap();
-        let result = solve_compare_region(&problem, &reference_genome, true).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
 
         // our results should have two of the SNVs skipped, one in truth and one in query; this is because they can't get incorporated
         assert_eq!(result.total_ed(), 0); // add ED comes from the variant skips

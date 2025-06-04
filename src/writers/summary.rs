@@ -1,13 +1,15 @@
 
-
+use indexmap::IndexMap;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 
 use crate::data_types::compare_benchmark::CompareBenchmark;
+use crate::data_types::grouped_metrics::GroupMetrics;
 use crate::data_types::summary_metrics::SummaryMetrics;
 use crate::data_types::variants::VariantType;
+use crate::parsing::stratifications::Stratifications;
 
 pub const COMPARE_GT: &str = "GT";
 pub const COMPARE_HAP: &str = "HAP";
@@ -18,18 +20,10 @@ pub const COMPARE_BASEPAIR: &str = "BASEPAIR";
 pub struct SummaryWriter {
     /// Comparison label to go on each row
     compare_label: String,
-    /// Stores GT-level summary metrics
-    gt_summary_metrics: SummaryMetrics,
-    /// Stores haplotype-level summary metrics; i.e., a homozygous TP counts for 2
-    hap_summary_metrics: SummaryMetrics,
-    /// Stores alignment-level summary metrics (basepairs)
-    basepair_summary_metrics: SummaryMetrics,
-    /// Stores the variant-level stats for GT comparison
-    variant_gt_summary_metrics: BTreeMap<VariantType, SummaryMetrics>,
-    /// Stores the variant-level stats for hap comparison
-    variant_hap_summary_metrics: BTreeMap<VariantType, SummaryMetrics>,
-    /// Stores the variant-level stats for basepair comparison
-    variant_basepair_summary_metrics: BTreeMap<VariantType, SummaryMetrics>
+    /// Metrics for the "ALL" category
+    all_metrics: GroupMetrics,
+    /// Metrics for the stratifications
+    strat_metrics: IndexMap<String, GroupMetrics>
 }
 
 /// Contains all the data written to each row of our stats file
@@ -37,8 +31,10 @@ pub struct SummaryWriter {
 struct SummaryRow {
     /// User provided label
     compare_label: String,
-    /// Comparison type
+    /// Comparison type, which will be one of GT, HAP, or BASEPAIR
     comparison: String,
+    /// Region label, which is ALL or a label from stratification
+    region_label: String,
     /// Any applied filters
     filter: String,
     /// The type of variant represented by this row
@@ -50,6 +46,8 @@ struct SummaryRow {
     truth_tp: u64,
     /// Total number of false negatives
     truth_fn: u64,
+    /// Total number of variants in the query
+    query_total: u64,
     /// Total number of true positives in query
     query_tp: u64,
     /// Total number of false positives
@@ -64,13 +62,17 @@ struct SummaryRow {
 
 impl SummaryRow {
     /// Creates a new row from labels and summary metrics
-    pub fn new(compare_label: String, variant_type: String, filter: String, comparison: String, metrics: &SummaryMetrics) -> Self {
+    pub fn new(
+        compare_label: String, comparison: String, region_label: String, filter: String, variant_type: String,
+        metrics: &SummaryMetrics
+    ) -> Self {
         Self {
             compare_label,
-            variant_type, filter, comparison,
+            comparison, region_label, filter, variant_type, 
             truth_total: metrics.truth_tp + metrics.truth_fn,
             truth_tp: metrics.truth_tp,
             truth_fn: metrics.truth_fn,
+            query_total: metrics.query_tp + metrics.query_fp,
             query_tp: metrics.query_tp,
             query_fp: metrics.query_fp,
             metric_recall: metrics.recall(),
@@ -82,10 +84,24 @@ impl SummaryRow {
 
 impl SummaryWriter {
     /// Creates a new writer to accumulate stats
-    pub fn new(compare_label: String) -> Self {
+    /// # Arguments
+    /// * `compare_label` - User-provided string that gets filled into a column
+    /// * `stratifications` - Optional, if present the labels (and order) get copied
+    pub fn new(compare_label: String, stratifications: Option<&Stratifications>) -> Self {
+        let strat_metrics = if let Some(strat) = stratifications {
+            let labels = strat.labels();
+            labels.into_iter()
+                .map(|l| (l, Default::default()))
+                .collect()
+        } else {
+            // no stratifications
+            Default::default()
+        };
+
         Self {
             compare_label,
-            ..Default::default()
+            all_metrics: Default::default(),
+            strat_metrics,
         }
     }
 
@@ -93,23 +109,15 @@ impl SummaryWriter {
     /// # Arguments
     /// * `comparison` - the results from our benchmarking
     pub fn add_comparison_benchmark(&mut self, comparison: &CompareBenchmark) {
-        self.gt_summary_metrics += comparison.bm_gt();
-        self.hap_summary_metrics += comparison.bm_hap();
-        self.basepair_summary_metrics += comparison.bm_basepair();
+        // always add to ALL metrics
+        let group_metrics = comparison.group_metrics();
+        self.all_metrics += &group_metrics;
 
-        for (&variant_type, &variant_metrics) in comparison.variant_gt() {
-            let entry = self.variant_gt_summary_metrics.entry(variant_type).or_default();
-            *entry += variant_metrics;
-        }
-
-        for (&variant_type, &variant_metrics) in comparison.variant_hap() {
-            let entry = self.variant_hap_summary_metrics.entry(variant_type).or_default();
-            *entry += variant_metrics;
-        }
-
-        for (&variant_type, &variant_metrics) in comparison.variant_basepair() {
-            let entry = self.variant_basepair_summary_metrics.entry(variant_type).or_default();
-            *entry += variant_metrics;
+        // add to any containment indices
+        if let Some(contained_indices) = comparison.containment_regions() {
+            for &ci in contained_indices.iter() {
+                self.strat_metrics[ci] += &group_metrics;
+            }
         }
     }
 
@@ -128,31 +136,61 @@ impl SummaryWriter {
         let joint_label = "JointIndel".to_string();
         let joint_types = [VariantType::Insertion, VariantType::Deletion, VariantType::Indel];
 
-        // GT level analysis
-        write_category(
-            &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), "GT".to_string(),
-            &self.gt_summary_metrics, &self.variant_gt_summary_metrics,
+        // first, write the ALL group
+        write_group(
+            &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), "ALL".to_string(),
+            &self.all_metrics,
             joint_label.clone(), &joint_types
         )?;
 
-        // Haplotype level analysis
-        write_category(
-            &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), "HAP".to_string(),
-            &self.hap_summary_metrics, &self.variant_hap_summary_metrics,
-            joint_label.clone(), &joint_types
-        )?;
-
-        // Basepair level analysis
-        write_category(
-            &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), "BASEPAIR".to_string(),
-            &self.basepair_summary_metrics, &self.variant_basepair_summary_metrics,
-            joint_label.clone(), &joint_types
-        )?;
+        for (strat_label, strat_result) in self.strat_metrics.iter() {
+            write_group(
+                &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), strat_label.clone(),
+                strat_result,
+                joint_label.clone(), &joint_types
+            )?;
+        }
 
         // save everything
         csv_writer.flush()?;
         Ok(())
     }
+}
+
+/// Wrapper function for write out everything for a particular group of statistics
+/// # Arguments
+/// * `csv_writer` - the writer handle
+/// * `compare_label` - user provided comparison label, fixed
+/// * `filter` - pass through to filter field of row, this is either "ALL" or one of the stratification labels
+/// * `group_metrics` - the group metrics
+/// * `joint_label` - a joint label for a special row
+/// * `joint_types` - the variant types that get added together for the joint row
+fn write_group(
+    csv_writer: &mut csv::Writer<File>,
+    compare_label: String, filter: String, region_label: String,
+    group_metrics: &GroupMetrics,
+    joint_label: String, joint_types: &[VariantType],
+) -> csv::Result<()> {
+    // GT level analysis
+    write_category(
+        csv_writer, compare_label.clone(), filter.clone(), "GT".to_string(), region_label.clone(),
+        group_metrics.gt(), group_metrics.variant_gt(),
+        joint_label.clone(), joint_types
+    )?;
+
+    // Haplotype level analysis
+    write_category(
+        csv_writer, compare_label.clone(), filter.clone(), "HAP".to_string(), region_label.clone(),
+        group_metrics.hap(), group_metrics.variant_hap(),
+        joint_label.clone(), joint_types
+    )?;
+
+    // Basepair level analysis
+    write_category(
+        csv_writer, compare_label, filter, "BASEPAIR".to_string(), region_label,
+        group_metrics.basepair(), group_metrics.variant_basepair(),
+        joint_label, joint_types
+    )
 }
 
 /// Wrapper function for write out everything for a particular category
@@ -168,14 +206,15 @@ impl SummaryWriter {
 #[allow(clippy::too_many_arguments)]
 fn write_category(
     csv_writer: &mut csv::Writer<File>,
-    compare_label: String, filter: String, comparison_type: String,
+    compare_label: String, filter: String, comparison_type: String, region_label: String,
     full_metrics: &SummaryMetrics,
     type_metrics: &BTreeMap<VariantType, SummaryMetrics>,
     joint_label: String, joint_types: &[VariantType],
 ) -> csv::Result<()> {
     // write the row for all variants
     let all_row = SummaryRow::new(
-        compare_label.clone(), "ALL".to_string(), filter.clone(), comparison_type.clone(), full_metrics
+        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), "ALL".to_string(),
+        full_metrics
     );
     csv_writer.serialize(&all_row)?;
 
@@ -183,7 +222,8 @@ fn write_category(
     let mut joint_metrics = SummaryMetrics::default();
     for (variant_type, metrics) in type_metrics.iter() {
         let v_row = SummaryRow::new(
-            compare_label.clone(), format!("{variant_type:?}"), filter.clone(), comparison_type.clone(), metrics
+            compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), format!("{variant_type:?}"),
+            metrics
         );
         csv_writer.serialize(&v_row)?;
 
@@ -194,7 +234,8 @@ fn write_category(
 
     // we also have the joint indel row
     let joint_row = SummaryRow::new(
-        compare_label.clone(), joint_label, filter.clone(), comparison_type.clone(), &joint_metrics
+        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label,
+        &joint_metrics
     );
     csv_writer.serialize(&joint_row)?;
 
