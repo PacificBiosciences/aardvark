@@ -61,18 +61,20 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 * `metric_recall` - The recall metric, which is calculated as `truth_tp / truth_total`.
 * `metric_precision` - The precision metric, which is calculated as `query_tp / (query_tp + query_fp)`.
 * `metric_f1` - The F1 score metric, which is calculated as the harmonic mean of recall and precision. It is often used as an overall summary metric for comparisons.
+* `truth_fn_gt` - The number of `truth_fn` where the allelic sequence was matched in both inputs, but with the wrong genotype (e.g., 1/1 in truth, 0/1 in query). This value is only populated if the `comparison` is `GT`.
+* `query_fp_gt` - The number of `query_fp` where the allelic sequence was matched in both inputs, but with the wrong genotype (e.g., 0/1 in truth, 1/1 in query). This value is only populated if the `comparison` is `GT`.
 
 ### Example
 This snippet of the summary file shows the `GT` and `BASEPAIR` comparison types, filtered to `ALL`, `Snv`, and `JointIndel` variant types.
 
 ```
-compare_label	comparison	region_label	filter	variant_type	truth_total	truth_tp	truth_fn	query_total	query_tp	query_fp	metric_recall	metric_precision	metric_f1
-compare	GT	ALL	ALL	ALL	3751311	3737771	13540	3757515	3741335	16180	0.9963905951812579	0.9956939626322183	0.9960421571004356
-compare	GT	ALL	ALL	Snv	3256086	3250157	5929	3256468	3252130	4338	0.9981791021490218	0.9986678818892125	0.9984234321984007
-compare	GT	ALL	ALL	JointIndel	495225	487614	7611	501047	489205	11842	0.9846312282295926	0.9763654906625526	0.980480939116689
-compare	BASEPAIR	ALL	ALL	ALL	12661262	12624128	37134	12657970	12624128	33842	0.9970671170061879	0.997326427539329	0.9971967554150142
-compare	BASEPAIR	ALL	ALL	Snv	9087802	9075500	12302	9087548	9080279	7269	0.9986463173383399	0.9992001142662466	0.9989231390468849
-compare	BASEPAIR	ALL	ALL	JointIndel	3587078	3561871	25207	3585212	3562195	23017	0.9929728319261527	0.9935800170254925	0.9932763316834902
+compare_label	comparison	region_label	filter	variant_type	truth_total	truth_tp	truth_fn	query_total	query_tp	query_fp	metric_recall	metric_precision	metric_f1	truth_fn_gt	query_fp_gt
+compare	GT	ALL	ALL	ALL	3751311	3745038	6273	3755783	3748198	7585	0.9983277846065016	0.9979804477521731	0.9981540859628386	2062	674
+compare	GT	ALL	ALL	Snv	3256086	3254704	1382	3260867	3257726	3141	0.999575564036085	0.9990367592422505	0.9993060890111242	528	115
+compare	GT	ALL	ALL	JointIndel	495225	490334	4891	494916	490472	4444	0.9901236811550306	0.9910206984619612	0.9905719867339353	1534	559
+compare	BASEPAIR	ALL	ALL	ALL	12661284	12643818	17466	12658838	12643818	15020	0.9986205190563611	0.9988134771927724	0.9987169888043983		
+compare	BASEPAIR	ALL	ALL	Snv	9087804	9085371	2433	9097196	9091342	5854	0.9997322785570639	0.9993565050153915	0.9995443564686981		
+compare	BASEPAIR	ALL	ALL	JointIndel	3587078	3571059	16019	3577802	3568620	9182	0.9955342482098243	0.9974336198593438	0.9964830289490779
 ```
 
 ## Labeled VCF files
@@ -145,17 +147,17 @@ Fields:
 * `region_id` - A unique region identifier corresponding to the `RI` field of the [debug VCFs](#debug-vcf-details)
 * `coordinates` - The coordinates of the corresponding region
 * `comparison` - The comparison type for the metrics on the row, which will be one of `GT`, `HAP`, or `BASEPAIR`. This is a summary for `ALL` variant types.
-* `truth_total`, `truth_tp`, `truth_fn`, `query_tp`, `query_fp`, `metric_recall`, `metric_precision`, `metric_f1` - See definitions for the [summary statistics file](#summary-statistics-file)
+* `truth_total`, `truth_tp`, `truth_fn`, `query_tp`, `query_fp`, `metric_recall`, `metric_precision`, `metric_f1`, `truth_fn_gt`, `query_fp_gt` - See definitions for the [summary statistics file](#summary-statistics-file)
 
 Partial example:
 ```
-region_id	coordinates	comparison	truth_total	truth_tp	truth_fn	query_tp	query_fp	metric_recall	metric_precision	metric_f1
-0	chr1:782956-783056	GT	1	1	0	1	0	1.0	1.0	1.0
-0	chr1:782956-783056	HAP	2	2	0	2	0	1.0	1.0	1.0
-0	chr1:782956-783056	BASEPAIR	4	4	0	4	0	1.0	1.0	1.0
-1	chr1:783125-783225	GT	1	1	0	1	0	1.0	1.0	1.0
-1	chr1:783125-783225	HAP	2	2	0	2	0	1.0	1.0	1.0
-1	chr1:783125-783225	BASEPAIR	4	4	0	4	0	1.0	1.0	1.0
+region_id	coordinates	comparison	truth_total	truth_tp	truth_fn	query_total	query_tp	query_fp	metric_recall	metric_precision	metric_f1	truth_fn_gt	query_fp_gt
+0	chr1:782956-783056	GT	1	1	0	1	1	0	1.0	1.0	1.0	0	0
+0	chr1:782956-783056	HAP	2	2	0	2	2	0	1.0	1.0	1.0		
+0	chr1:782956-783056	BASEPAIR	4	4	0	4	4	0	1.0	1.0	1.0		
+1	chr1:783125-783225	GT	1	1	0	1	1	0	1.0	1.0	1.0	0	0
+1	chr1:783125-783225	HAP	2	2	0	2	2	0	1.0	1.0	1.0		
+1	chr1:783125-783225	BASEPAIR	4	4	0	4	4	0	1.0	1.0	1.0	
 ...
 ```
 

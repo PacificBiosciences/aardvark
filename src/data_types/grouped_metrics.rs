@@ -2,19 +2,19 @@
 use std::collections::BTreeMap;
 use std::ops::AddAssign;
 
-use crate::data_types::summary_metrics::SummaryMetrics;
+use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
 use crate::data_types::variants::VariantType;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GroupMetrics {
     /// Stores GT-level summary metrics
-    gt: SummaryMetrics,
+    gt: SummaryGtMetrics,
     /// Stores haplotype-level summary metrics; i.e., a homozygous TP counts for 2
     hap: SummaryMetrics,
     /// Stores alignment-level summary metrics (basepairs)
     basepair: SummaryMetrics,
     /// Stores the variant-level stats for GT comparison
-    variant_gt: BTreeMap<VariantType, SummaryMetrics>,
+    variant_gt: BTreeMap<VariantType, SummaryGtMetrics>,
     /// Stores the variant-level stats for hap comparison
     variant_hap: BTreeMap<VariantType, SummaryMetrics>,
     /// Stores the variant-level stats for basepair comparison
@@ -24,8 +24,8 @@ pub struct GroupMetrics {
 impl GroupMetrics {
     /// Constructor
     pub fn new(
-        gt: SummaryMetrics, hap: SummaryMetrics, basepair: SummaryMetrics,
-        variant_gt: BTreeMap<VariantType, SummaryMetrics>,
+        gt: SummaryGtMetrics, hap: SummaryMetrics, basepair: SummaryMetrics,
+        variant_gt: BTreeMap<VariantType, SummaryGtMetrics>,
         variant_hap: BTreeMap<VariantType, SummaryMetrics>,
         variant_basepair: BTreeMap<VariantType, SummaryMetrics>
     ) -> Self {
@@ -36,7 +36,7 @@ impl GroupMetrics {
     }
 
     // getters
-    pub fn gt(&self) -> &SummaryMetrics {
+    pub fn gt(&self) -> &SummaryGtMetrics {
         &self.gt
     }
 
@@ -48,7 +48,7 @@ impl GroupMetrics {
         &self.basepair
     }
 
-    pub fn variant_gt(&self) -> &BTreeMap<VariantType, SummaryMetrics> {
+    pub fn variant_gt(&self) -> &BTreeMap<VariantType, SummaryGtMetrics> {
         &self.variant_gt
     }
 
@@ -100,15 +100,15 @@ mod tests {
     #[test]
     fn test_group_add_assign() {
         let mut g1 = GroupMetrics::new(
-            SummaryMetrics::new(1, 0, 1, 0),
+            SummaryGtMetrics::new(1, 0, 1, 0, 0, 2),
             SummaryMetrics::new(1, 2, 1, 2),
             SummaryMetrics::new(3, 0, 1, 4),
-            [(VariantType::Snv, SummaryMetrics::new(1, 2, 3, 4))].into_iter().collect(),
+            [(VariantType::Snv, SummaryGtMetrics::new(1, 2, 3, 4, 0, 0))].into_iter().collect(),
             Default::default(),
             [(VariantType::Insertion, SummaryMetrics::new(1, 2, 3, 4))].into_iter().collect(),
         );
         let g2 = GroupMetrics::new(
-            SummaryMetrics::new(1, 2, 3, 4),
+            SummaryGtMetrics::new(1, 2, 3, 4, 1, 0),
             SummaryMetrics::new(4, 3, 2, 1),
             SummaryMetrics::new(0, 1, 0, 2),
             Default::default(),
@@ -117,10 +117,10 @@ mod tests {
         );
 
         let expected_sum = GroupMetrics::new(
-            SummaryMetrics::new(2, 2, 4, 4),
+            SummaryGtMetrics::new(2, 2, 4, 4, 1, 2),
             SummaryMetrics::new(5, 5, 3, 3),
             SummaryMetrics::new(3, 1, 1, 6),
-            [(VariantType::Snv, SummaryMetrics::new(1, 2, 3, 4))].into_iter().collect(),
+            [(VariantType::Snv, SummaryGtMetrics::new(1, 2, 3, 4, 0, 0))].into_iter().collect(),
             Default::default(),
             [(VariantType::Insertion, SummaryMetrics::new(3, 4, 6, 8))].into_iter().collect(),
         );

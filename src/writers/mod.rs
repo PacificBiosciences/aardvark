@@ -1,4 +1,6 @@
 
+/// Wrapper that handles the parallel writing of all outputs at the compare step
+pub mod compare_parallel;
 /// Generates the summary file for merging
 pub mod merge_summary;
 /// Helper functions for indexing file

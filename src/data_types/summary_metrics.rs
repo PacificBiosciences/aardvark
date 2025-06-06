@@ -28,10 +28,7 @@ impl SummaryMetrics {
     /// Constructor
     pub fn new(truth_tp: u64, truth_fn: u64, query_tp: u64, query_fp: u64) -> Self {
         Self {
-            truth_tp,
-            truth_fn,
-            query_tp,
-            query_fp
+            truth_tp, truth_fn, query_tp, query_fp
         }
     }
 
@@ -77,6 +74,49 @@ impl SummaryMetrics {
     }
 }
 
+/// These are metrics that are only provided for the GT type
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SummaryGtMetrics {
+    /// The main metrics that would be shared
+    pub summary_metrics: SummaryMetrics,
+    // Extra GT-specific metrics
+    /// The number of FN.GT calls; i.e. 1/1 -> 0/1
+    pub truth_fn_gt: u64,
+    /// The number of FP.GT calls; i.e. 0/1 -> 1/1
+    pub query_fp_gt: u64
+}
+
+impl AddAssign for SummaryGtMetrics {
+    // Enables += with stats
+    fn add_assign(&mut self, rhs: Self) {
+        self.summary_metrics += rhs.summary_metrics;
+        self.truth_fn_gt += rhs.truth_fn_gt;
+        self.query_fp_gt += rhs.query_fp_gt;
+    }
+}
+
+impl SummaryGtMetrics {
+    // Constructor
+    pub fn new(truth_tp: u64, truth_fn: u64, query_tp: u64, query_fp: u64, truth_fn_gt: u64, query_fp_gt: u64) -> Self {
+        Self {
+            summary_metrics: SummaryMetrics::new(truth_tp, truth_fn, query_tp, query_fp),
+            truth_fn_gt,
+            query_fp_gt
+        }
+    }
+
+    /// Copies the truth values from `other` to our query values
+    pub fn set_query_from_truth(&mut self, other: &Self) {
+        self.summary_metrics.set_query_from_truth(&other.summary_metrics);
+        self.query_fp_gt = other.truth_fn_gt;
+    }
+
+    /// Copies the query values from `other` to our truth values
+    pub fn set_truth_from_query(&mut self, other: &Self) {
+        self.summary_metrics.set_truth_from_query(&other.summary_metrics);
+        self.truth_fn_gt = other.query_fp_gt;
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -96,6 +136,16 @@ mod tests {
         let mut summary = SummaryMetrics { truth_tp: 10, truth_fn: 2, query_tp: 3, query_fp: 4};
         let summary2 = SummaryMetrics { truth_tp: 3, truth_fn: 1, query_tp: 10, query_fp: 2};
         summary += summary2;
-        assert_eq!(summary, SummaryMetrics { truth_tp: 13, truth_fn: 3, query_tp: 13, query_fp: 6})
+        assert_eq!(summary, SummaryMetrics {
+            truth_tp: 13, truth_fn: 3, query_tp: 13, query_fp: 6,
+        });
+    }
+
+    #[test]
+    fn test_extra_add_assign() {
+        let mut extra = SummaryGtMetrics::new(10, 9, 8, 7, 6, 5);
+        let extra2 = SummaryGtMetrics::new(1, 2, 1, 2, 1, 2);
+        extra += extra2;
+        assert_eq!(extra, SummaryGtMetrics::new(11, 11, 9, 9, 7, 7));
     }
 }

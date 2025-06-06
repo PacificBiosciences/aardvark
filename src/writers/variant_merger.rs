@@ -1,6 +1,7 @@
 
 use anyhow::{Context, bail, ensure};
 use log::{debug, info, error};
+use noodles::bgzf;
 use noodles::core::Position;
 use noodles::vcf;
 use noodles::vcf::header::record::value::{Map, map};
@@ -8,6 +9,7 @@ use noodles::vcf::variant::io::Write;
 use noodles_util::variant::io::indexed_reader::Builder as VcfBuilder;
 use noodles::vcf::variant::record::samples::keys::key as vcf_key;
 use noodles::vcf::variant::record_buf;
+use std::fs::File;
 use std::path::Path;
 use rustc_hash::FxHashMap as HashMap;
 
@@ -26,16 +28,20 @@ pub struct VariantMerger {
     /// Header that goes into the merged VCF, copied from the primary input
     merged_header: vcf::Header,
     /// Writer for the primary merged VCF
-    merged_writer: vcf::io::Writer<Box<dyn std::io::Write>>,
+    merged_writer: vcf::io::Writer<bgzf::MultithreadedWriter<File>>,
     /// Pre-computed labels of classification to a joined string
     prelabels: HashMap<MergeClassification, record_buf::info::field::Value>,
     /// Set of all labels by index
     input_labels: Vec<String>,
     /// Writes out the relevant bed regions
-    region_writer: noodles::bed::Writer<4, std::io::BufWriter<noodles::bgzf::Writer<std::fs::File>>>,
+    region_writer: noodles::bed::Writer<4, std::io::BufWriter<bgzf::MultithreadedWriter<std::fs::File>>>,
     /// Writes out the relevant bed regions
-    failed_region_writer: noodles::bed::Writer<4, std::io::BufWriter<noodles::bgzf::Writer<std::fs::File>>>
+    failed_region_writer: noodles::bed::Writer<4, std::io::BufWriter<bgzf::MultithreadedWriter<std::fs::File>>>
 }
+
+// TODO: technically, this is writing 3 big files (well, 2 big, 1 small).
+//      If this ever becomes a bottleneck, we can give it the compare_parallel.rs treatment and split the files out.
+//      I don't think it's worth the engineering effort ATM.
 
 impl VariantMerger {
     /// Constructor
@@ -44,11 +50,13 @@ impl VariantMerger {
     /// * `input_labels` - used to tag passing variants
     /// * `out_vcf_folder` - defines where all output VCFs go
     /// * `out_sample_name` - sample name for the output
+    /// * `threads` - number of threads to use per writer
     pub fn new<P: AsRef<Path> + std::fmt::Debug>(
         input_vcfs: &[P],
         input_labels: Vec<String>,
         out_vcf_folder: &Path,
         out_sample_name: String,
+        threads: usize
     ) -> anyhow::Result<Self> {
         // sanity checks
         ensure!(input_vcfs.len() == input_labels.len(), "Expected 1-to-1 relationship between input_vcfs and input_labels");
@@ -113,9 +121,10 @@ impl VariantMerger {
         // now open the file up for writing
         let out_vcf_fn = out_vcf_folder.join("passing.vcf.gz");
         debug!("Opening {out_vcf_fn:?} for writing...");
-        let mut vcf_writer = vcf::io::writer::Builder::default()
-            .set_compression_method(noodles::vcf::io::CompressionMethod::Bgzf)
-            .build_from_path(out_vcf_fn)?;
+        let file = File::create(&out_vcf_fn)?;
+        let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
+        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
+        let mut vcf_writer = vcf::io::Writer::new(bgzf_writer);
         vcf_writer.write_header(&vcf_header)?;
 
         // create any common labels
@@ -130,13 +139,15 @@ impl VariantMerger {
 
         // lastly, we need a region writer
         let bed_fn = out_vcf_folder.join("regions.bed.gz");
-        let bgzf_writer = std::fs::File::create(bed_fn).map(noodles::bgzf::io::Writer::new)?;
+        let file = File::create(&bed_fn)?;
+        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
         #[allow(clippy::default_constructed_unit_structs)]
         let region_writer = noodles::bed::io::writer::Builder::<4>::default()
             .build_from_writer(bgzf_writer);
 
         let failed_bed_fn = out_vcf_folder.join("failed_regions.bed.gz");
-        let bgzf_writer = std::fs::File::create(failed_bed_fn).map(noodles::bgzf::io::Writer::new)?;
+        let file = File::create(&failed_bed_fn)?;
+        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
         #[allow(clippy::default_constructed_unit_structs)]
         let failed_region_writer = noodles::bed::io::writer::Builder::<4>::default()
             .build_from_writer(bgzf_writer);

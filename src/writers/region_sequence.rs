@@ -1,5 +1,5 @@
 
-use flate2::write::GzEncoder;
+use noodles::bgzf;
 use serde::Serialize;
 use std::fs::File;
 use std::path::Path;
@@ -10,7 +10,7 @@ use crate::data_types::compare_region::CompareRegion;
 /// This is a wrapper for writing out summary stats to a file
 pub struct RegionSequenceWriter {
     /// Handle on the writer
-    csv_writer: csv::Writer<GzEncoder<File>>,
+    csv_writer: csv::Writer<bgzf::MultithreadedWriter<File>>,
 }
 
 /// Contains all the data written to each row of our stats file
@@ -49,14 +49,11 @@ impl RegionSequenceWriter {
     /// Creates a new writer to save sequences. The output will be tab-delimited and gzipped.
     /// # Arguments
     /// * `filename` - path to the filename that will get opened; expected to be .tsv.gz
-    pub fn new(filename: &Path) -> anyhow::Result<Self> {
+    /// * `threads` - worker threads for the gzip writing
+    pub fn new(filename: &Path, threads: usize) -> anyhow::Result<Self> {
         let delimiter: u8 = b'\t';
-        let gzip_writer = GzEncoder::new(
-            File::create(filename)?,
-            // default compression = 6; the "best" mode was 2x slow with very little gains
-            flate2::Compression::default()
-        );
-
+        let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
+        let gzip_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, File::create(filename)?);
         let csv_writer= csv::WriterBuilder::new()
             .delimiter(delimiter)
             .from_writer(gzip_writer);

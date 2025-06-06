@@ -1,3 +1,10 @@
+# v0.7.1
+## Changes
+- Added two new `GT`-specific statistics to the summary files:
+  - `truth_fn_gt` - The number of `truth_fn` where the allelic sequence was matched in both inputs, but with the wrong genotype (e.g., 1/1 in truth, 0/1 in query). This value is only populated if the `comparison` is `GT`.
+  - `query_fp_gt` - The number of `query_fp` where the allelic sequence was matched in both inputs, but with the wrong genotype (e.g., 0/1 in truth, 1/1 in query). This value is only populated if the `comparison` is `GT`.
+- Added parallelization to the writers for both `compare` and `merge`.
+
 # v0.7.0
 ## Changes
 - Added a new option to `compare` mode: `--stratifications`. If provided, this will post-annotate all regions by the provided stratifications and add additional rows to the output summary TSV, see documentation for more details.

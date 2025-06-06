@@ -1,4 +1,5 @@
 
+use anyhow::ensure;
 use indexmap::IndexMap;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -7,7 +8,7 @@ use std::path::Path;
 
 use crate::data_types::compare_benchmark::CompareBenchmark;
 use crate::data_types::grouped_metrics::GroupMetrics;
-use crate::data_types::summary_metrics::SummaryMetrics;
+use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
 use crate::data_types::variants::VariantType;
 use crate::parsing::stratifications::Stratifications;
 
@@ -23,7 +24,11 @@ pub struct SummaryWriter {
     /// Metrics for the "ALL" category
     all_metrics: GroupMetrics,
     /// Metrics for the stratifications
-    strat_metrics: IndexMap<String, GroupMetrics>
+    strat_metrics: IndexMap<String, GroupMetrics>,
+    /// Tracks the number of passing blocks added
+    solved_blocks: u64,
+    /// Tracks the number of blocks that failed
+    error_blocks: u64
 }
 
 /// Contains all the data written to each row of our stats file
@@ -57,7 +62,11 @@ struct SummaryRow {
     /// Precision = query.TP / (query.TP + query.FP)
     metric_precision: Option<f64>,
     /// F1 = combination score of recall and precision
-    metric_f1: Option<f64>
+    metric_f1: Option<f64>,
+    /// FN.GT = false negatives that are GT errors, so 1/1 -> 0/1; only present for GT type
+    truth_fn_gt: Option<u64>,
+    /// FP.GT = false positives that are GT errors, so 0/1 -> 1/1; only present for GT type
+    query_fp_gt: Option<u64>
 }
 
 impl SummaryRow {
@@ -78,6 +87,30 @@ impl SummaryRow {
             metric_recall: metrics.recall(),
             metric_precision: metrics.precision(),
             metric_f1: metrics.f1(),
+            truth_fn_gt: None,
+            query_fp_gt: None
+        }
+    }
+
+    /// Creates a new row for a GT entry
+    pub fn new_gt(
+        compare_label: String, comparison: String, region_label: String, filter: String, variant_type: String,
+        metrics: &SummaryGtMetrics
+    ) -> Self {
+        Self {
+            compare_label,
+            comparison, region_label, filter, variant_type, 
+            truth_total: metrics.summary_metrics.truth_tp + metrics.summary_metrics.truth_fn,
+            truth_tp: metrics.summary_metrics.truth_tp,
+            truth_fn: metrics.summary_metrics.truth_fn,
+            query_total: metrics.summary_metrics.query_tp + metrics.summary_metrics.query_fp,
+            query_tp: metrics.summary_metrics.query_tp,
+            query_fp: metrics.summary_metrics.query_fp,
+            metric_recall: metrics.summary_metrics.recall(),
+            metric_precision: metrics.summary_metrics.precision(),
+            metric_f1: metrics.summary_metrics.f1(),
+            truth_fn_gt: Some(metrics.truth_fn_gt),
+            query_fp_gt: Some(metrics.query_fp_gt)
         }
     }
 }
@@ -102,6 +135,8 @@ impl SummaryWriter {
             compare_label,
             all_metrics: Default::default(),
             strat_metrics,
+            solved_blocks: 0,
+            error_blocks: 0
         }
     }
 
@@ -112,6 +147,7 @@ impl SummaryWriter {
         // always add to ALL metrics
         let group_metrics = comparison.group_metrics();
         self.all_metrics += &group_metrics;
+        self.solved_blocks += 1;
 
         // add to any containment indices
         if let Some(contained_indices) = comparison.containment_regions() {
@@ -121,10 +157,15 @@ impl SummaryWriter {
         }
     }
 
+    /// Increments the number of errors blocks we found
+    pub fn inc_error_blocks(&mut self) {
+        self.error_blocks += 1;
+    }
+
     /// Will write the summary out to the given file path
     /// # Arguments
     /// * `filename` - the filename for the output (tsv/csv)
-    pub fn write_summary(&mut self, filename: &Path) -> csv::Result<()> {
+    pub fn write_summary(&mut self, filename: &Path) -> anyhow::Result<()> {
         // modify the delimiter to "," if it ends with .csv
         let is_csv: bool = filename.extension().unwrap_or_default() == "csv";
         let delimiter: u8 = if is_csv { b',' } else { b'\t' };
@@ -155,6 +196,19 @@ impl SummaryWriter {
         csv_writer.flush()?;
         Ok(())
     }
+
+    // getters
+    pub fn all_metrics(&self) -> &GroupMetrics {
+        &self.all_metrics
+    }
+
+    pub fn solved_blocks(&self) -> u64 {
+        self.solved_blocks
+    }
+
+    pub fn error_blocks(&self) -> u64 {
+        self.error_blocks
+    }
 }
 
 /// Wrapper function for write out everything for a particular group of statistics
@@ -170,9 +224,9 @@ fn write_group(
     compare_label: String, filter: String, region_label: String,
     group_metrics: &GroupMetrics,
     joint_label: String, joint_types: &[VariantType],
-) -> csv::Result<()> {
+) -> anyhow::Result<()> {
     // GT level analysis
-    write_category(
+    write_gt_category(
         csv_writer, compare_label.clone(), filter.clone(), "GT".to_string(), region_label.clone(),
         group_metrics.gt(), group_metrics.variant_gt(),
         joint_label.clone(), joint_types
@@ -190,7 +244,8 @@ fn write_group(
         csv_writer, compare_label, filter, "BASEPAIR".to_string(), region_label,
         group_metrics.basepair(), group_metrics.variant_basepair(),
         joint_label, joint_types
-    )
+    )?;
+    Ok(())
 }
 
 /// Wrapper function for write out everything for a particular category
@@ -234,6 +289,57 @@ fn write_category(
 
     // we also have the joint indel row
     let joint_row = SummaryRow::new(
+        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label,
+        &joint_metrics
+    );
+    csv_writer.serialize(&joint_row)?;
+
+    Ok(())
+}
+
+/// Wrapper function for write out everything for a GT category
+/// # Arguments
+/// * `csv_writer` - the writer handle
+/// * `compare_label` - user provided comparison label, fixed
+/// * `filter` - pass through to filter field of row
+/// * `comparison_type` - pass through to comparison in row
+/// * `full_metrics` - the summary for all metric types
+/// * `type_metrics` - variant-specific metrics
+/// * `joint_label` - a joint label for a special row
+/// * `joint_types` - the variant types that get added together for the joint row
+#[allow(clippy::too_many_arguments)]
+fn write_gt_category(
+    csv_writer: &mut csv::Writer<File>,
+    compare_label: String, filter: String, comparison_type: String, region_label: String,
+    full_metrics: &SummaryGtMetrics,
+    type_metrics: &BTreeMap<VariantType, SummaryGtMetrics>,
+    joint_label: String, joint_types: &[VariantType],
+) -> anyhow::Result<()> {
+    ensure!(comparison_type.as_str() == "GT", "write_gt_category requires a GT input");
+
+    // write the row for all variants
+    let all_row = SummaryRow::new_gt(
+        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), "ALL".to_string(),
+        full_metrics
+    );
+    csv_writer.serialize(&all_row)?;
+
+    // variant-specific metrics
+    let mut joint_metrics = SummaryGtMetrics::default();
+    for (variant_type, metrics) in type_metrics.iter() {
+        let v_row = SummaryRow::new_gt(
+            compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), format!("{variant_type:?}"),
+            metrics
+        );
+        csv_writer.serialize(&v_row)?;
+
+        if joint_types.contains(variant_type) {
+            joint_metrics += *metrics;
+        }
+    }
+
+    // we also have the joint indel row
+    let joint_row = SummaryRow::new_gt(
         compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label,
         &joint_metrics
     );
