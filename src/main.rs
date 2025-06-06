@@ -1,5 +1,4 @@
 
-use aardvark::parsing::stratifications::Stratifications;
 use indicatif::{ParallelProgressIterator, ProgressIterator};
 use log::{LevelFilter, debug, error, info, warn};
 use rayon::prelude::*;
@@ -13,17 +12,18 @@ use aardvark::data_types::compare_benchmark::CompareBenchmark;
 use aardvark::data_types::compare_region::CompareRegion;
 use aardvark::data_types::merge_benchmark::MergeBenchmark;
 use aardvark::data_types::multi_region::MultiRegion;
-use aardvark::data_types::summary_metrics::SummaryMetrics;
 use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
 use aardvark::parsing::region_generation::RegionIterator;
+use aardvark::parsing::stratifications::Stratifications;
 use aardvark::util::json_io::save_json;
 use aardvark::util::progress_bar::get_progress_style;
 use aardvark::waffle_solver::solve_compare_region;
+use aardvark::writers::compare_parallel::write_compare_outputs;
 use aardvark::writers::merge_summary::MergeSummaryWriter;
 use aardvark::writers::region_sequence::RegionSequenceWriter;
 use aardvark::writers::region_summary::RegionSummaryWriter;
 use aardvark::writers::summary::SummaryWriter;
-use aardvark::writers::variant_categorizer::{VariantCategorizer, index_categorizer};
+use aardvark::writers::variant_categorizer::VariantCategorizer;
 use aardvark::writers::variant_merger::{VariantMerger, index_merger};
 
 fn run_compare(settings: CompareSettings) {
@@ -131,11 +131,12 @@ fn run_compare(settings: CompareSettings) {
         settings.compare_label.clone(), stratifications.as_ref()
     );
 
+    let w_threads = settings.threads / 4;
     info!("Opening output VCF files...");
-    let mut vcf_writer = match VariantCategorizer::new(
+    let (truth_vcf_writer, query_vcf_writer) = match VariantCategorizer::new_writer_pair(
         &settings.truth_vcf_filename, settings.truth_sample.clone(),
         &settings.query_vcf_filename, settings.query_sample.clone(),
-        &settings.output_folder) {
+        &settings.output_folder, w_threads) {
         Ok(vw) => vw,
         Err(e) => {
             error!("Error while building debug VCF writers: {e:#}");
@@ -143,10 +144,10 @@ fn run_compare(settings: CompareSettings) {
         }
     };
 
-    let mut region_writer = settings.debug_folder.as_ref().map(|debug_path| {
+    let region_writer = settings.debug_folder.as_ref().map(|debug_path| {
         info!("Opening debug region writer file...");
         let out_fn = debug_path.join("region_summary.tsv.gz");
-        match RegionSummaryWriter::new(&out_fn) {
+        match RegionSummaryWriter::new(&out_fn, w_threads) {
             Ok(rsw) => rsw,
             Err(e) => {
                 error!("Error while building region summary writer: {e:#}");
@@ -155,10 +156,10 @@ fn run_compare(settings: CompareSettings) {
         }
     });
 
-    let mut region_seq_writer = settings.debug_folder.as_ref().map(|debug_path| {
+    let region_seq_writer = settings.debug_folder.as_ref().map(|debug_path| {
         info!("Opening debug sequence writer file...");
         let out_fn = debug_path.join("region_sequences.tsv.gz");
-        match RegionSequenceWriter::new(&out_fn) {
+        match RegionSequenceWriter::new(&out_fn, w_threads) {
             Ok(rsw) => rsw,
             Err(e) => {
                 error!("Error while building region summary writer: {e:#}");
@@ -193,13 +194,6 @@ fn run_compare(settings: CompareSettings) {
             std::process::exit(exitcode::IOERR);
         }
     }
-
-    // metrics to track as we iterate
-    let mut joint_gt = SummaryMetrics::default();
-    let mut joint_hap = SummaryMetrics::default();
-    let mut joint_basepair = SummaryMetrics::default();
-    let mut error_blocks = 0;
-    let mut solved_blocks = 0;
 
     // first pre-load all the regions we are comparing; this is currently single-threaded
     let all_regions: Vec<CompareRegion> = match region_iter
@@ -246,45 +240,23 @@ fn run_compare(settings: CompareSettings) {
     all_results.sort_by_key(|(r, _c)| r.region_id());
     info!("Region comparisons complete, saving all outputs...");
 
-    // now save all our result outputs
-    let style = get_progress_style();
-    for (region, opt_comparison) in all_results.into_iter().progress_with_style(style) {
-        if let Some(comparison) = opt_comparison {
-            // writer updates
-            summary_writer.add_comparison_benchmark(&comparison);
-            if let Some(rsw) = region_writer.as_mut() {
-                if let Err(e) = rsw.write_region_summary(&region, &comparison) {
-                    error!("Error while writing region summary results: {e:#}");
-                    std::process::exit(exitcode::IOERR);
-                }
-            }
+    if let Err(e) = write_compare_outputs(
+        all_results, &mut summary_writer, truth_vcf_writer, query_vcf_writer, region_writer, region_seq_writer
+    ) {
+        error!("Error while saving output files: {e:#}");
+        std::process::exit(exitcode::IOERR);
+    };
 
-            if let Some(rsw) = region_seq_writer.as_mut() {
-                if let Err(e) = rsw.write_region_sequences(&region, &comparison) {
-                    error!("Error while writing region sequences results: {e:#}");
-                    std::process::exit(exitcode::IOERR);
-                }
-            }
+    let joint_gt = summary_writer.all_metrics().gt();
+    let joint_hap = summary_writer.all_metrics().hap();
+    let joint_basepair = summary_writer.all_metrics().basepair();
+    let solved_blocks = summary_writer.solved_blocks();
+    let error_blocks = summary_writer.error_blocks();
 
-            if let Err(e) = vcf_writer.write_results(&region, &comparison) {
-                error!("Error while writing VCF results: {e:#}");
-                std::process::exit(exitcode::IOERR);
-            }
-
-            // stats this loop tracks
-            joint_gt += comparison.bm_gt();
-            joint_hap += comparison.bm_hap();
-            joint_basepair += comparison.bm_basepair();
-            solved_blocks += 1;
-        } else {
-            error_blocks += 1;
-        }
-    }
-
-    info!("Joint GT: {joint_gt:?}");
-    info!("\tRecall: {:?}", joint_gt.recall());
-    info!("\tPrecision: {:?}", joint_gt.precision());
-    info!("\tF1: {:?}", joint_gt.f1());
+    info!("Joint GT: {:?}", joint_gt.summary_metrics);
+    info!("\tRecall: {:?}", joint_gt.summary_metrics.recall());
+    info!("\tPrecision: {:?}", joint_gt.summary_metrics.precision());
+    info!("\tF1: {:?}", joint_gt.summary_metrics.f1());
     info!("Joint Hap: {joint_hap:?}");
     info!("\tRecall: {:?}", joint_hap.recall());
     info!("\tPrecision: {:?}", joint_hap.precision());
@@ -300,13 +272,6 @@ fn run_compare(settings: CompareSettings) {
     info!("Saving output summary to {:?}...", summary_fn);
     if let Err(e) = summary_writer.write_summary(&summary_fn) {
         error!("Error while saving summary file: {e:#}");
-        std::process::exit(exitcode::IOERR);
-    }
-
-    // index the VCFs
-    info!("Indexing all output VCF files...");
-    if let Err(e) = index_categorizer(&settings.output_folder, vcf_writer) {
-        error!("Error while indexing VCF files: {e:#}");
         std::process::exit(exitcode::IOERR);
     }
 
@@ -467,9 +432,11 @@ fn run_merge(settings: MergeSettings) {
     info!("Region merging complete, saving all outputs...");
 
     // now save all our result outputs
+    let w_threads = settings.threads / 3;
     let mut merged_writer = match VariantMerger::new(
         &settings.vcf_filenames, settings.vcf_tags.clone(),
-        &settings.output_vcf_folder, settings.vcf_samples[0].clone()
+        &settings.output_vcf_folder, settings.vcf_samples[0].clone(),
+        w_threads
     ) {
         Ok(mw) => mw,
         Err(e) => {

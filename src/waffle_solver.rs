@@ -628,7 +628,7 @@ fn generate_expected_zyg_counts(zygosities: &[PhasedZygosity]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use crate::data_types::summary_metrics::SummaryMetrics;
+    use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
     use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
 
     use super::*;
@@ -744,8 +744,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 0, 1, 0));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
@@ -788,8 +788,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1}); // two variants here
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 1});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0)); // two variants here
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 0, 1, 0));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(),
@@ -834,8 +834,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2}); // only one variant in truth set
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 2});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 0, 2, 0));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[
@@ -878,8 +878,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 0, truth_fn: 0, query_tp: 1}); // only one variant in truth set
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 0, truth_fn: 0, query_tp: 2}); // but two haplotype variants
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 0, 2, 0)); // but two haplotype variants
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 2, 2).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 2, 2).unwrap()]);
@@ -913,8 +913,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 1); // 1 BP ed
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 0, query_fp: 0, truth_fn: 1, query_tp: 0});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(0, 1, 0, 0));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap()]);
         assert_eq!(result.query_variant_data(), &[]);
@@ -958,8 +958,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 2); // two BP delta
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 1});
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 2});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 1, 2, 1));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(), // FP in truth space
@@ -1005,8 +1005,8 @@ mod tests {
 
         let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
         assert_eq!(result.total_ed(), 1); // path through graph is an exact match still
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 0, query_fp: 1, truth_fn: 1, query_tp: 1});
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 1, query_fp: 1, truth_fn: 1, query_tp: 1});
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(0, 1, 1, 1, 1, 0));
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 1, 1, 1));
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(3, 1, 3, 1)); // one allele is on track, the other is half-right, half-wrong
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap() // expected homozygous, but found something else
@@ -1046,8 +1046,8 @@ mod tests {
 
         // our results should have two of the SNVs skipped, one in truth and one in query; this is because they can't get incorporated
         assert_eq!(result.total_ed(), 0); // add ED comes from the variant skips
-        assert_eq!(result.bm_gt(), SummaryMetrics {truth_tp: 1, query_fp: 1, truth_fn: 1, query_tp: 1}); // one right, one wrong in each
-        assert_eq!(result.bm_hap(), SummaryMetrics {truth_tp: 2, query_fp: 1, truth_fn: 1, query_tp: 2}); // two correct alleles, one skipped
+        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 1, 1, 1, 1, 1)); // one right, one wrong in each
+        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 1, 2, 1)); // two correct alleles, one skipped
         assert_eq!(result.bm_basepair(), SummaryMetrics::new(4, 2, 4, 2)); // same, but doubled for basepair
         assert_eq!(result.variant_basepair().get(&VariantType::Snv).unwrap(), &SummaryMetrics::new(3, 1, 3, 1)); // check that one SNV is missed, but half right in this situation
         assert_eq!(result.variant_basepair().get(&VariantType::Deletion).unwrap(), &SummaryMetrics::new(2, 0, 2, 0)); // check that one SNV is missed, but half right in this situation

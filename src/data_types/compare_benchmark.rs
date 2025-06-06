@@ -1,9 +1,9 @@
 
-use anyhow::bail;
+use anyhow::{bail, ensure};
 use std::collections::BTreeMap;
 
 use crate::data_types::grouped_metrics::GroupMetrics;
-use crate::data_types::summary_metrics::SummaryMetrics;
+use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
 use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
 use crate::data_types::variants::{Variant, VariantType};
 
@@ -16,15 +16,15 @@ pub struct CompareBenchmark {
     bm_edit_distance_h1: usize,
     /// Best match, edit distance for hap2
     bm_edit_distance_h2: usize,
+    /// Best match genotype metrics
+    bm_gt: SummaryGtMetrics,
     /// Best match haplotype metrics
     bm_hap: SummaryMetrics,
-    /// Best match genotype metrics
-    bm_gt: SummaryMetrics,
     /// Best match basepair metrics
     bm_basepair: SummaryMetrics,
 
     /// Variant genotype statistics
-    variant_gt: BTreeMap<VariantType, SummaryMetrics>,
+    variant_gt: BTreeMap<VariantType, SummaryGtMetrics>,
     /// Variant haplotype statistics
     variant_hap: BTreeMap<VariantType, SummaryMetrics>,
     /// Variant basepair statistics
@@ -58,8 +58,8 @@ impl CompareBenchmark {
             region_id,
             bm_edit_distance_h1,
             bm_edit_distance_h2,
-            bm_hap: Default::default(),
             bm_gt: Default::default(),
+            bm_hap: Default::default(),
             bm_basepair: Default::default(),
             variant_gt: Default::default(),
             variant_hap: Default::default(),
@@ -102,8 +102,8 @@ impl CompareBenchmark {
                 self.bm_hap.truth_tp += expected_zygosity_count as u64;
                 v_hap.truth_tp += expected_zygosity_count as u64;
 
-                self.bm_gt.truth_tp += 1;
-                v_gt.truth_tp += 1;
+                self.bm_gt.summary_metrics.truth_tp += 1;
+                v_gt.summary_metrics.truth_tp += 1;
             },
             std::cmp::Ordering::Greater => {
                 // we found too few relative to expected, so add the missing to FN
@@ -113,8 +113,13 @@ impl CompareBenchmark {
                 v_hap.truth_fn += (expected_zygosity_count - observed_zygosity_count) as u64;
 
                 // expected > observed, this is a false negative
-                self.bm_gt.truth_fn += 1;
-                v_gt.truth_fn += 1;
+                self.bm_gt.summary_metrics.truth_fn += 1;
+                v_gt.summary_metrics.truth_fn += 1;
+                if observed_zygosity_count > 0 {
+                    // observed was >0, this is purely a GT difference like 1/1 -> 0/1
+                    self.bm_gt.truth_fn_gt += 1;
+                    v_gt.truth_fn_gt += 1;
+                }
             },
         };
 
@@ -127,7 +132,7 @@ impl CompareBenchmark {
 
     /// Adds a query variant comparison to the tracking
     /// # Arguments
-    /// * `variant` - the truth variant to add
+    /// * `variant` - the query variant to add
     /// * `expected_zygosity_count` - number of times this allele was expected in the query set; e.g. 0/1 => 1, 1/1 => 2
     /// * `observed_zygosity_count` - number of times this allele was identified in the best-matching truth haplotype sequences
     pub fn add_query_zygosity(&mut self, variant: &Variant, expected_zygosity_count: u8, observed_zygosity_count: u8) -> anyhow::Result<()> {
@@ -139,32 +144,15 @@ impl CompareBenchmark {
         let v_gt = self.variant_gt.entry(variant_type).or_default();
         let v_hap = self.variant_hap.entry(variant_type).or_default();
 
-        // compare expected to observed
-        match expected_zygosity_count.cmp(&observed_zygosity_count) {
-            std::cmp::Ordering::Less => {
-                // we found too many observed relative to expected, so add the extra to FP
-                bail!("No implementation for query false negatives");
-            },
-            std::cmp::Ordering::Equal => {
-                // they match, so add one per expected
-                self.bm_hap.query_tp += expected_zygosity_count as u64;
-                v_hap.query_tp += expected_zygosity_count as u64;
+        // normally, we would compare expected to observed, but this function is only used for exact matches currently
+        ensure!(expected_zygosity_count == observed_zygosity_count, "No implementation for non-equal query zygosities");
 
-                self.bm_gt.query_tp += 1;
-                v_gt.query_tp += 1;
-            },
-            std::cmp::Ordering::Greater => {
-                // we found too few relative to expected, so add the missing to FN
-                self.bm_hap.query_tp += observed_zygosity_count as u64;
-                self.bm_hap.query_fp += (expected_zygosity_count - observed_zygosity_count) as u64;
-                v_hap.query_tp += observed_zygosity_count as u64;
-                v_hap.query_fp += (expected_zygosity_count - observed_zygosity_count) as u64;
+        // they match, so add one per expected
+        self.bm_hap.query_tp += expected_zygosity_count as u64;
+        v_hap.query_tp += expected_zygosity_count as u64;
 
-                // expected > observed, this is a false negative
-                self.bm_gt.query_fp += 1;
-                v_gt.query_fp += 1;
-            },
-        };
+        self.bm_gt.summary_metrics.query_tp += 1;
+        v_gt.summary_metrics.query_tp += 1;
 
         // add the variant metrics, since this is a query variant, toggle the source info
         let variant_metrics = VariantMetrics::toggle_source(
@@ -256,7 +244,7 @@ impl CompareBenchmark {
         self.bm_hap
     }
 
-    pub fn bm_gt(&self) -> SummaryMetrics {
+    pub fn bm_gt(&self) -> SummaryGtMetrics {
         self.bm_gt
     }
 
@@ -272,7 +260,7 @@ impl CompareBenchmark {
         &self.query_variant_data
     }
 
-    pub fn variant_gt(&self) -> &BTreeMap<VariantType, SummaryMetrics> {
+    pub fn variant_gt(&self) -> &BTreeMap<VariantType, SummaryGtMetrics> {
         &self.variant_gt
     }
 
