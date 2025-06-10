@@ -1,3 +1,7 @@
+# v0.7.2
+## Fixed
+* Added changes to build script to enable bioconda building from source
+
 # v0.7.1
 ## Changes
 - Added two new `GT`-specific statistics to the summary files:
