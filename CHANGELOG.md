@@ -1,6 +1,15 @@
+# v0.7.3
+## Changes
+- Added REF/ALT trimming of identical tail basepair sequences, which resolves some edge-case variant conflicts in the T2T truth set. This minor change tends to slightly improve the overall accuracy by reducing variant conflicts, allowing for overlapping changes when the trimming removes previously conflicting bases. Some Indel variants may be classified differently compared to previous versions. See the output VCF files for trimmed representations. Examples:
+  - AC->CC : this is trimmed to A->C and classified as a SNV now.
+  - ACC->AC : this is trimmed to AC->A and classified as a Deletion now.
+  - AC->ACC : this is trimmed to A->AC and classified as an Insertion now.
+- Adds a new option `--disable-variant-trimming` to both `compare` and `merge` modes, which disable the above trimming behavior.
+- Updated the install documentation to reflect bioconda support
+
 # v0.7.2
 ## Fixed
-* Added changes to build script to enable bioconda building from source
+- Added changes to build script to enable bioconda building from source
 
 # v0.7.1
 ## Changes

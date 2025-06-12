@@ -48,7 +48,7 @@ pub struct CompareSettings {
     #[clap(help_heading = Some("Input/Output"))]
     pub regions: Option<PathBuf>,
 
-    /// Stratifications
+    /// Stratifications, specifically the root file-of-filenames TSV
     #[clap(short = 's')]
     #[clap(long = "stratification")]
     #[clap(value_name = "TSV")]
@@ -96,6 +96,11 @@ pub struct CompareSettings {
     #[clap(help_heading = Some("Region generation"))]
     #[clap(default_value = "50")]
     pub min_variant_gap: usize,
+
+    /// Disables variant trimming, which may have a negative impact on accuracy
+    #[clap(long = "disable-variant-trimming")]
+    #[clap(help_heading = Some("Region generation"))]
+    pub disable_variant_trimming: bool,
 
     /// Maximum edit distance in the WFA comparison before quitting
     #[clap(long = "max-edit-distance")]
@@ -187,6 +192,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         bail!("--min-variant-gap must be >0");
     }
     info!("\tMinimum variant gap: {}", settings.min_variant_gap);
+    info!("\tVariant trimming: {}", if settings.disable_variant_trimming { "DISABLED "} else { "ENABLED" });
 
     // info!("Compare parameters:");
     // info!("\tMax edit distance: {}", settings.max_edit_distance); // we removed this

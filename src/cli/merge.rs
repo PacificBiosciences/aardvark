@@ -112,6 +112,11 @@ pub struct MergeSettings {
     #[clap(default_value = "50")]
     pub min_variant_gap: usize,
 
+    /// Disables variant trimming, which may have a negative impact on accuracy
+    #[clap(long = "disable-variant-trimming")]
+    #[clap(help_heading = Some("Region generation"))]
+    pub disable_variant_trimming: bool,
+
     /// Selects pre-set merge strategy for inclusion of a variant
     #[clap(long = "merge-strategy")]
     #[clap(value_name = "STRAT")]
@@ -205,6 +210,7 @@ pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<Merge
     info!("Region generation parameters:");
     ensure!(settings.min_variant_gap > 0, "--min-variant-gap must be >0");
     info!("\tMinimum variant gap: {}", settings.min_variant_gap);
+    info!("\tVariant trimming: {}", if settings.disable_variant_trimming { "DISABLED "} else { "ENABLED" });
 
     // info!("Compare parameters:");
     // info!("\tMax edit distance: {}", settings.max_edit_distance);
