@@ -37,6 +37,8 @@ pub struct RegionIterator {
     region_queue: std::collections::VecDeque<MultiRegion>,
     /// Amount of flanks to apply to each variant
     flank_size: usize,
+    /// Allows variants to get trimmed, removing extra bases from REF/ALT
+    enable_trimming: bool,
     /// Tracks the chromosome lengths
     chrom_lengths: HashMap<String, usize>,
     /// If true, changes output messages slightly
@@ -54,6 +56,9 @@ impl RegionIterator {
     /// * `query_sample` - sample name to read from in the query VCF
     /// * `confidence_regions` - filepath for the confidence region, BED expected (Optional)
     /// * `reference_genome` - the pre-loaded reference genome dictionary
+    /// * `flank_size` - the window to merge variants
+    /// * `enable_trimming` - allows variants to get trimmed, removing extra bases from REF/ALT
+    #[allow(clippy::too_many_arguments)]
     pub fn new_compare_iterator(
         truth_vcf_fn: &Path,
         truth_sample: &str,
@@ -61,7 +66,8 @@ impl RegionIterator {
         query_sample: &str,
         confidence_regions: Option<&Path>,
         reference_genome: &ReferenceGenome,
-        flank_size: usize
+        flank_size: usize,
+        enable_trimming: bool
     ) -> anyhow::Result<Self> {
         // Open the VCF files
         let mut truth_vcf_reader = VcfBuilder::default()
@@ -105,6 +111,7 @@ impl RegionIterator {
             hc_bed_regions,
             region_queue: Default::default(),
             flank_size,
+            enable_trimming,
             chrom_lengths,
             is_compare_iterator: true,
             preloaded_variants: None
@@ -117,12 +124,15 @@ impl RegionIterator {
     /// * `sample_names` - sample name to read from in the provided VCFs
     /// * `confidence_regions` - filepath for the confidence region, BED expected (Optional)
     /// * `reference_genome` - the pre-loaded reference genome dictionary
+    /// * `flank_size` - the window to merge variants
+    /// * `enable_trimming` - allows variants to get trimmed, removing extra bases from REF/ALT
     pub fn new_merge_iterator<P: AsRef<Path> + std::fmt::Debug, S: AsRef<str> + std::fmt::Debug>(
         vcf_filenames: &[P],
         sample_names: &[S],
         confidence_regions: Option<&Path>,
         reference_genome: &ReferenceGenome,
-        flank_size: usize
+        flank_size: usize,
+        enable_trimming: bool
     ) -> anyhow::Result<Self> {
         // sanity checks
         ensure!(vcf_filenames.len() == sample_names.len(), "vcf_filenames and sample_names must be equal length");
@@ -174,6 +184,7 @@ impl RegionIterator {
             hc_bed_regions,
             region_queue: Default::default(),
             flank_size,
+            enable_trimming,
             chrom_lengths,
             is_compare_iterator: false,
             preloaded_variants: None
@@ -248,7 +259,7 @@ impl RegionIterator {
 
                 // load the variants into memory
                 match load_variants_in_region(
-                    &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region
+                    &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region, self.enable_trimming
                 ).with_context(|| format!("Error while pre-loading variants from input #{vi} in {full_chrom_region}:")) {
                     Ok(v) => Ok(
                         ((vi, chrom_index), v)
@@ -322,7 +333,7 @@ impl Iterator for RegionIterator {
 
                         // load the variants into memory
                         match load_variants_in_region(
-                            &vcf_header, &mut vcf_reader, vcf_index, &full_chrom_region
+                            &vcf_header, &mut vcf_reader, vcf_index, &full_chrom_region, self.enable_trimming
                         ).with_context(|| format!("Error while parsing variants from input #{i} in {full_chrom_region}:")) {
                             Ok(v) => Ok((i, v)),
                             Err(e) => Err(e)
@@ -474,18 +485,20 @@ impl Iterator for RegionIterator {
 /// * `vcf_reader` - dynamic typed index VCF reader
 /// * `sample_index` - index of the sample in the VCF file, usually 0 in our case
 /// * `region` - the full region to load variants from
+/// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
 fn load_variants_in_region(
     vcf_header: &vcf::Header,
     vcf_reader: &mut VcfReader<noodles::bgzf::Reader<File>>,
     sample_index: usize,
-    region: &Region
+    region: &Region,
+    enable_trimming: bool
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     let mut ret: Vec<(Variant, PhasedZygosity)> = Default::default();
     for result in vcf_reader.query(vcf_header, region)? {
         let record: Box<dyn vcf::variant::Record> = result?;
         let record_buf = vcf::variant::RecordBuf::try_from_variant_record(vcf_header, record.as_ref())?;
     
-        let variants = parse_variant(&record_buf, sample_index)
+        let variants = parse_variant(&record_buf, sample_index, enable_trimming)
             .with_context(|| {
                 format!("Error parsing variants in {record_buf:?}:")
             })?;
@@ -508,9 +521,11 @@ fn load_variants_in_region(
 /// # Arguments
 /// * `record` - the record to parse
 /// * `sample_index` - index of the sample to pull genotypes from
+/// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
 fn parse_variant(
     record: &vcf::variant::RecordBuf,
-    sample_index: usize
+    sample_index: usize,
+    enable_trimming: bool
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     // variant level column
     let chrom = record.reference_bases();
@@ -538,13 +553,17 @@ fn parse_variant(
             continue;
         }
 
-        let ref_sequence = ref_seq.as_bytes().to_vec();
-        let alt_sequence = alts[alt_index-1].as_bytes().to_vec();
+        let mut ref_sequence = ref_seq.as_bytes().to_vec();
+        let mut alt_sequence = alts[alt_index-1].as_bytes().to_vec();
         let position = (pos.get() - 1) as u64; // convert to 0-based
-        // let allele_index = alt_index as u8;
 
-        // let variant_type = get_variant_type(&ref_sequence, &alt_sequence);
-        let variant_type = get_variant_type(record, alt_index)?;
+        // trim off any extra bases at the end
+        while enable_trimming && ref_sequence.len() > 1 && alt_sequence.len() > 1 && ref_sequence.last().unwrap() == alt_sequence.last().unwrap() {
+            assert!(ref_sequence.pop().is_some());
+            assert!(alt_sequence.pop().is_some());
+        }
+
+        let variant_type = get_variant_type(record, &ref_sequence, &alt_sequence)?;
         let variant = match variant_type {
             VariantType::Snv => Variant::new_snv(0, position, ref_sequence, alt_sequence),
             VariantType::Insertion => Variant::new_insertion(0, position, ref_sequence, alt_sequence),
@@ -617,7 +636,11 @@ fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> anyh
 }
 
 /// Given a record, this will extract the type of the variant contained
-fn get_variant_type(record: &vcf::variant::RecordBuf, alt_index: usize) -> anyhow::Result<VariantType> {
+/// # Arguments
+/// * `record` - the original loaded record, which may have additional tags to parse
+/// * `ref_sequence` - the reference sequence, which may be adjusted from what is in the record
+/// * `ref_sequence` - the alt sequence, which may be adjusted from what is in the record
+fn get_variant_type(record: &vcf::variant::RecordBuf, ref_sequence: &[u8], alt_sequence: &[u8]) -> anyhow::Result<VariantType> {
     use vcf::variant::record::info::field::key as info_key;
 
     // check for SVs, which we are not supporting yet
@@ -633,9 +656,7 @@ fn get_variant_type(record: &vcf::variant::RecordBuf, alt_index: usize) -> anyho
         bail!("STRs are not yet supported: {trid:?}");
         // we can copy HiPhase logic if we desire
     }
-    
-    let ref_sequence = record.reference_bases().as_bytes();
-    let alt_sequence = record.alternate_bases().as_ref()[alt_index - 1].as_bytes();
+
     let vt = match (ref_sequence.len(), alt_sequence.len()) {
         (0, _) | (_, 0) => bail!("cannot have alleles with 0 length"),
         (1, 1) => VariantType::Snv,

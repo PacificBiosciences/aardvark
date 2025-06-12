@@ -177,7 +177,8 @@ fn run_compare(settings: CompareSettings) {
         &settings.query_sample,
         settings.regions.as_deref(),
         &reference_genome,
-        settings.min_variant_gap
+        settings.min_variant_gap,
+        !settings.disable_variant_trimming
     ) {
         Ok(ri) => ri,
         Err(e) => {
@@ -347,7 +348,8 @@ fn run_merge(settings: MergeSettings) {
         &settings.vcf_samples,
         settings.merge_regions.as_deref(),
         &reference_genome,
-        settings.min_variant_gap
+        settings.min_variant_gap,
+        !settings.disable_variant_trimming
     ) {
         Ok(ri) => ri,
         Err(e) => {
