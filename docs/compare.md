@@ -42,7 +42,7 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 
 ### Fields
 * `compare_label` - A user-provided comparison label that is just passed through to this output. Specified via `--compare-label` option.
-* `comparison` - The comparison type, which will be one of `GT` (genotype), `HAP` (haplotype), or `BASEPAIR` (sequence/basepair level). See [methods](./methods.md#comparison-types) for more details on each comparison type.
+* `comparison` - The comparison type, which will be one of `GT` (genotype), `HAP` (haplotype), `WEIGHTED_HAP` (weighted haplotye), or `BASEPAIR` (sequence/basepair level). See [methods](./methods.md#comparison-types) for more details on each comparison type.
 * `filter` - Indicates if any filter was applied.
 * `region_label` - The region label from stratification inputs. By default, only `ALL` is provided which contains all variants analyzed. If [stratifications](#stratifications) are provided, then additional rows for each stratification label will be added and this column will contain the label.
 * `variant_type` - The type of variant that the assessment corresponds to.

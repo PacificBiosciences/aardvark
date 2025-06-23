@@ -1,3 +1,5 @@
+use crate::util::sequence_alignment::wfa_ed;
+
 
 /// All the variant types we are currently allowing
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -287,34 +289,6 @@ impl Variant {
         })
     }
 
-    pub fn vcf_index(&self) -> usize {
-        self.vcf_index
-    }
-
-    pub fn variant_type(&self) -> VariantType {
-        self.variant_type
-    }
-
-    pub fn position(&self) -> u64 {
-        self.position
-    }
-
-    pub fn ref_len(&self) -> usize {
-        self.allele0.len()
-    }
-
-    pub fn allele0(&self) -> &[u8] {
-        &self.allele0
-    }
-
-    pub fn allele1(&self) -> &[u8] {
-        &self.allele1
-    }
-
-    pub fn is_ignored(&self) -> bool {
-        self.is_ignored
-    }
-
     pub fn set_ignored(&mut self) {
         self.is_ignored = true;
     }
@@ -352,6 +326,40 @@ impl Variant {
         } else {
             panic!("index must be 0, 1, or 2");
         }
+    }
+
+    /// Calculates the REF/ALT edit distance for this variant
+    pub fn alt_ed(&self) -> anyhow::Result<usize> {
+        wfa_ed(&self.allele0, &self.allele1)
+    }
+
+    // getters
+    pub fn vcf_index(&self) -> usize {
+        self.vcf_index
+    }
+
+    pub fn variant_type(&self) -> VariantType {
+        self.variant_type
+    }
+
+    pub fn position(&self) -> u64 {
+        self.position
+    }
+
+    pub fn ref_len(&self) -> usize {
+        self.allele0.len()
+    }
+
+    pub fn allele0(&self) -> &[u8] {
+        &self.allele0
+    }
+
+    pub fn allele1(&self) -> &[u8] {
+        &self.allele1
+    }
+
+    pub fn is_ignored(&self) -> bool {
+        self.is_ignored
     }
 }
 

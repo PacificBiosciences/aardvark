@@ -1,5 +1,6 @@
 
 use anyhow::{bail, ensure, Context};
+use derive_builder::Builder;
 use log::debug;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
 
@@ -22,13 +23,34 @@ const SUPPORTED_VARIANT_TYPES: [VariantType; 4] = [
     VariantType::Indel
 ];
 
+/// Controls what passes our merging process
+#[derive(Builder, Clone, Copy, Debug)]
+#[builder(default)]
+pub struct CompareConfig {
+    /// if True, saves the haplotype sequences which may consume more memory than normal
+    enable_sequences: bool,
+    /// if True, this will enable a compute shortcut for exact-matching sequences at the cost of some variant-level assessment accuracy
+    enable_exact_shortcut: bool,
+}
+
+impl Default for CompareConfig {
+    fn default() -> Self {
+        // these settings are set to reasonable defaults for unit tests
+        // main.rs will set each of them manually based on user input
+        Self {
+            enable_sequences: true,
+            enable_exact_shortcut: false
+        }
+    }
+}
+
 /// Entry point for comparing a region
 /// # Arguments
 /// * `problem` - core problem that we want to do the comparison on
 /// * `reference_genome` - shared pre-loaded reference genome, intended to be provided from Arc<ReferenceGenome> reference in parallelization
-/// * `enable_sequences` - if True, saves the haplotype sequences which may consume more memory than normal
+/// * `compare_config` - collection of configuration items for the compare mode
 pub fn solve_compare_region(
-    problem: &CompareRegion, reference_genome: &ReferenceGenome, enable_sequences: bool, stratifications: Option<&Stratifications>
+    problem: &CompareRegion, reference_genome: &ReferenceGenome, compare_config: CompareConfig, stratifications: Option<&Stratifications>
 ) -> anyhow::Result<CompareBenchmark> {
     // pull out core components from the problem space
     let problem_id = problem.region_id();
@@ -75,7 +97,7 @@ pub fn solve_compare_region(
     let mut best_results = vec![];
     for optimized_haplotypes in all_optimized_haplotypes.into_iter() {
         // check if the sequences are identical with 0 errors and 0 skipped variants
-        if optimized_haplotypes.is_exact_match() {
+        if compare_config.enable_exact_shortcut && optimized_haplotypes.is_exact_match() {
             // TODO: account for phasing if we ever add it
             debug!("B#{problem_id} exact match identified:");
 
@@ -87,7 +109,7 @@ pub fn solve_compare_region(
                 &reference[ref_start..ref_end], &optimized_haplotypes
             )?;
 
-            if enable_sequences {
+            if compare_config.enable_sequences {
                 let bundle = SequenceBundle::new(
                     String::from_utf8(ref_seq.to_vec())?,
                     String::from_utf8(optimized_haplotypes.truth_seq1().to_vec())?,
@@ -141,7 +163,7 @@ pub fn solve_compare_region(
             hap2_compare.truth_alleles()
         )?;
 
-        if enable_sequences {
+        if compare_config.enable_sequences {
             let bundle = SequenceBundle::new(
                 String::from_utf8(ref_seq.to_vec())?,
                 String::from_utf8(optimized_haplotypes.truth_seq1().to_vec())?,
@@ -405,7 +427,7 @@ fn generate_exact_match(
     for (&ev, variant) in expected_zyg_counts.iter().zip(truth_variants.iter())  {
         // figure out how many bases are correctly added, which is the different in REF and ALT sequences for the variant
         // we double everything here to avoid floating-point
-        let ref_alt_dist = 2 * wfa_ed(variant.allele0(), variant.allele1())? as u64;
+        let ref_alt_dist = 2 * variant.alt_ed()? as u64;
         // create the metrics, scaling by expected zygosity
         let var_metrics = SummaryMetrics::new((ev as u64)*ref_alt_dist, 0, 0, 0);
 
@@ -419,7 +441,7 @@ fn generate_exact_match(
     for (&ev, variant) in expected_query_counts.iter().zip(query_variants.iter()) {
         // figure out how many bases are correctly added, which is the different in REF and ALT sequences for the variant
         // we double everything here to avoid floating-point
-        let ref_alt_dist = 2 * wfa_ed(variant.allele0(), variant.allele1())? as u64;
+        let ref_alt_dist = 2 * variant.alt_ed()? as u64;
         // create the metrics, scaling by expected zygosity
         let var_metrics = SummaryMetrics::new(0, 0, (ev as u64)*ref_alt_dist, 0);
 
@@ -579,7 +601,7 @@ fn generate_allele_sequence(
             // that would be this variant, so just treat it as REF; will get converted into a FN downstream
             // we do want to track how many bases this impacts though
             assert_eq!(variant.convert_index(0), 0); // verify REF is in allele0
-            failed_ed += wfa_ed(variant.allele0(), variant.allele1())?;
+            failed_ed += variant.alt_ed()?;
             continue;
         }
 
@@ -742,11 +764,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 0, 1, 0));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 0, 1, 0));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
 
@@ -786,11 +809,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0)); // two variants here
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 0, 1, 0));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0)); // two variants here
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 0, 1, 0));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(),
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()
@@ -832,11 +856,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0)); // only one variant in truth set
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 0, 2, 0));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 0, 2, 0));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap(),
@@ -876,11 +901,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0)); // only one variant in truth set
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 0, 2, 0)); // but two haplotype variants
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 0, 2, 0)); // but two haplotype variants
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 2, 2).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 2, 2).unwrap()]);
 
@@ -911,11 +937,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 1); // 1 BP ed
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(0, 1, 0, 0));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(0, 1, 0, 0));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap()]);
         assert_eq!(result.query_variant_data(), &[]);
 
@@ -956,11 +983,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 2); // two BP delta
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 1, 2, 1));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 1, 2, 1));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(), // FP in truth space
             VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap(), // FN in truth space
@@ -1003,11 +1031,12 @@ mod tests {
             0, coordinates, truth_variants, truth_zygosity, query_variants, query_zygosity
         ).unwrap();
 
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 1); // path through graph is an exact match still
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(0, 1, 1, 1, 1, 0));
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(1, 1, 1, 1));
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(3, 1, 3, 1)); // one allele is on track, the other is half-right, half-wrong
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(0, 1, 1, 1, 1, 0));
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 1, 1, 1));
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(3, 1, 3, 1)); // one allele is on track, the other is half-right, half-wrong
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap() // expected homozygous, but found something else
         ]);
@@ -1042,15 +1071,16 @@ mod tests {
         let problem = CompareRegion::new(
             0, region, variants.clone(), zygosities.clone(), variants, zygosities
         ).unwrap();
-        let result = solve_compare_region(&problem, &reference_genome, true, None).unwrap();
+        let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
 
         // our results should have two of the SNVs skipped, one in truth and one in query; this is because they can't get incorporated
         assert_eq!(result.total_ed(), 0); // add ED comes from the variant skips
-        assert_eq!(result.bm_gt(), SummaryGtMetrics::new(1, 1, 1, 1, 1, 1)); // one right, one wrong in each
-        assert_eq!(result.bm_hap(), SummaryMetrics::new(2, 1, 2, 1)); // two correct alleles, one skipped
-        assert_eq!(result.bm_basepair(), SummaryMetrics::new(4, 2, 4, 2)); // same, but doubled for basepair
-        assert_eq!(result.variant_basepair().get(&VariantType::Snv).unwrap(), &SummaryMetrics::new(3, 1, 3, 1)); // check that one SNV is missed, but half right in this situation
-        assert_eq!(result.variant_basepair().get(&VariantType::Deletion).unwrap(), &SummaryMetrics::new(2, 0, 2, 0)); // check that one SNV is missed, but half right in this situation
+        let group_metrics = result.group_metrics();
+        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 1, 1, 1, 1, 1)); // one right, one wrong in each
+        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 1, 2, 1)); // two correct alleles, one skipped
+        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(4, 2, 4, 2)); // same, but doubled for basepair
+        assert_eq!(group_metrics.variant_basepair().get(&VariantType::Snv).unwrap(), &SummaryMetrics::new(3, 1, 3, 1)); // check that one SNV is missed, but half right in this situation
+        assert_eq!(group_metrics.variant_basepair().get(&VariantType::Deletion).unwrap(), &SummaryMetrics::new(2, 0, 2, 0)); // check that one SNV is missed, but half right in this situation
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(),
             VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap()

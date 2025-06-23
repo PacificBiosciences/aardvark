@@ -14,6 +14,7 @@ use crate::parsing::stratifications::Stratifications;
 
 pub const COMPARE_GT: &str = "GT";
 pub const COMPARE_HAP: &str = "HAP";
+pub const COMPARE_WEIGHTED_HAP: &str = "WEIGHTED_HAP";
 pub const COMPARE_BASEPAIR: &str = "BASEPAIR";
 
 /// This is a wrapper for writing out summary stats to a file
@@ -146,13 +147,13 @@ impl SummaryWriter {
     pub fn add_comparison_benchmark(&mut self, comparison: &CompareBenchmark) {
         // always add to ALL metrics
         let group_metrics = comparison.group_metrics();
-        self.all_metrics += &group_metrics;
+        self.all_metrics += group_metrics;
         self.solved_blocks += 1;
 
         // add to any containment indices
         if let Some(contained_indices) = comparison.containment_regions() {
             for &ci in contained_indices.iter() {
-                self.strat_metrics[ci] += &group_metrics;
+                self.strat_metrics[ci] += group_metrics;
             }
         }
     }
@@ -227,21 +228,28 @@ fn write_group(
 ) -> anyhow::Result<()> {
     // GT level analysis
     write_gt_category(
-        csv_writer, compare_label.clone(), filter.clone(), "GT".to_string(), region_label.clone(),
+        csv_writer, compare_label.clone(), filter.clone(), COMPARE_GT.to_string(), region_label.clone(),
         group_metrics.gt(), group_metrics.variant_gt(),
         joint_label.clone(), joint_types
     )?;
 
     // Haplotype level analysis
     write_category(
-        csv_writer, compare_label.clone(), filter.clone(), "HAP".to_string(), region_label.clone(),
+        csv_writer, compare_label.clone(), filter.clone(), COMPARE_HAP.to_string(), region_label.clone(),
         group_metrics.hap(), group_metrics.variant_hap(),
+        joint_label.clone(), joint_types
+    )?;
+
+    // Weighted Haplotype level analysis
+    write_category(
+        csv_writer, compare_label.clone(), filter.clone(), COMPARE_WEIGHTED_HAP.to_string(), region_label.clone(),
+        group_metrics.weighted_hap(), group_metrics.variant_weighted_hap(),
         joint_label.clone(), joint_types
     )?;
 
     // Basepair level analysis
     write_category(
-        csv_writer, compare_label, filter, "BASEPAIR".to_string(), region_label,
+        csv_writer, compare_label, filter, COMPARE_BASEPAIR.to_string(), region_label,
         group_metrics.basepair(), group_metrics.variant_basepair(),
         joint_label, joint_types
     )?;
@@ -276,6 +284,11 @@ fn write_category(
     // variant-specific metrics
     let mut joint_metrics = SummaryMetrics::default();
     for (variant_type, metrics) in type_metrics.iter() {
+        if metrics.is_empty() {
+            // do not write a row if there's nothing to write
+            continue;
+        }
+
         let v_row = SummaryRow::new(
             compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), format!("{variant_type:?}"),
             metrics
