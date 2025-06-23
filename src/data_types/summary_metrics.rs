@@ -72,6 +72,11 @@ impl SummaryMetrics {
             None
         }
     }
+
+    /// Returns true if there are no values saved inside these metrics
+    pub fn is_empty(&self) -> bool {
+        self.truth_tp + self.truth_fn + self.query_tp + self.query_fp == 0
+    }
 }
 
 /// These are metrics that are only provided for the GT type

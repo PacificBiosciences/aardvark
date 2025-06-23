@@ -17,7 +17,7 @@ use aardvark::parsing::region_generation::RegionIterator;
 use aardvark::parsing::stratifications::Stratifications;
 use aardvark::util::json_io::save_json;
 use aardvark::util::progress_bar::get_progress_style;
-use aardvark::waffle_solver::solve_compare_region;
+use aardvark::waffle_solver::{solve_compare_region, CompareConfigBuilder};
 use aardvark::writers::compare_parallel::write_compare_outputs;
 use aardvark::writers::merge_summary::MergeSummaryWriter;
 use aardvark::writers::region_sequence::RegionSequenceWriter;
@@ -215,6 +215,18 @@ fn run_compare(settings: CompareSettings) {
         };
     info!("Region generation complete.");
 
+    // build our configuration
+    let compare_config = match CompareConfigBuilder::default()
+        .enable_exact_shortcut(settings.enable_exact_shortcut)
+        .enable_sequences(region_seq_writer.is_some())
+        .build() {
+        Ok(cc) => cc,
+        Err(e) => {
+            error!("Error while building compare config: {e:?}");
+            std::process::exit(exitcode::SOFTWARE);
+        }
+    };
+
     // run the parallel iterator to solve them
     let style = get_progress_style();
     info!("Comparing regions...");
@@ -224,7 +236,7 @@ fn run_compare(settings: CompareSettings) {
         .map(|region| {
             debug!("region = {region:?}");
             let comparison = match solve_compare_region(
-                &region, &reference_genome, region_seq_writer.is_some(), stratifications.as_ref()
+                &region, &reference_genome, compare_config, stratifications.as_ref()
             ) {
                 Ok(r) => Some(r),
                 Err(e) => {
@@ -250,6 +262,7 @@ fn run_compare(settings: CompareSettings) {
 
     let joint_gt = summary_writer.all_metrics().gt();
     let joint_hap = summary_writer.all_metrics().hap();
+    let joint_weighted_hap = summary_writer.all_metrics().weighted_hap();
     let joint_basepair = summary_writer.all_metrics().basepair();
     let solved_blocks = summary_writer.solved_blocks();
     let error_blocks = summary_writer.error_blocks();
@@ -262,6 +275,10 @@ fn run_compare(settings: CompareSettings) {
     info!("\tRecall: {:?}", joint_hap.recall());
     info!("\tPrecision: {:?}", joint_hap.precision());
     info!("\tF1: {:?}", joint_hap.f1());
+    info!("Joint Weighted Hap: {joint_weighted_hap:?}");
+    info!("\tRecall: {:?}", joint_weighted_hap.recall());
+    info!("\tPrecision: {:?}", joint_weighted_hap.precision());
+    info!("\tF1: {:?}", joint_weighted_hap.f1());
     info!("Joint Basepair: {joint_basepair:?}");
     info!("\tRecall: {:?}", joint_basepair.recall());
     info!("\tPrecision: {:?}", joint_basepair.precision());

@@ -30,10 +30,8 @@ In `compare` mode, Aardvark performs a comparison between "truth" and "query" se
 Each sub-region is compared independently, in parallel, using the following steps:
 
 1. Identify the optimal diplotype sequences - In this step, the algorithm searches for the optimal set of *phased* variant zygosities that minimizes the edit distance between the truth haplotype sequences and the query haplotype sequences. If pre-phased inputs are provided in the truth set, they are retained by Aardvark. In contrast, query phasing is ignored, allowing for phasing errors in the query set. This step outputs the optimal variant phasing and haplotype sequence pairs such that the edit distance between truth and query is minimized.
-  * If the edit distance is 0, then the truth and query input variants and zygosity represent identical haplotype sequences (ignoring phase errors). This allows for a short-circuit of the sub-region analysis and returns an "identity" result.
-  * If the edit distance is not 0, then the following steps are performed. 
 2. Compare the optimized sequences - The sequences are directly compared to calculate the total number of basepairs that are true positives (TP), false negatives (FN), and false positives (FP). This is calculated by measuring the edit distances between the reference genome, the truth optimal haplotype sequence, and the query optimal haplotype sequence. These values go into a system of equations to solve for TP, FN, and FP. The final results goes into the `BASEPAIR` comparison type.
-3. Compare the optimized alleles - Aardvark will also compare the individual alleles on a truth and query haplotype to determine if each is a TP, FN, or FP. Given a set of present alternate alleles on the truth and query haplotypes, it will search for a solution with the fewest number of errors (FN or FP) such that the generated haplotype sequences are identical. Conceptually, this process is very similar to that of [rtg vcfeval](https://github.com/RealTimeGenomics/rtg-tools). The results from each individual haplotype go into the `HAP` comparison type. They are combined into a genotype-level score in the `GT` comparison type, where an error in either haplotype counts as an error in the `GT` score.
+3. Compare the optimized alleles - Aardvark will also compare the individual alleles on a truth and query haplotype to determine if each is a TP, FN, or FP. Given a set of present alternate alleles on the truth and query haplotypes, it will search for a solution with the fewest number of errors (FN or FP) such that the generated haplotype sequences are identical. Conceptually, this process is very similar to that of [rtg vcfeval](https://github.com/RealTimeGenomics/rtg-tools). The results from each individual haplotype go into the `HAP` and `WEIGHTED_HAP` comparison types. The `HAP` evaluations are combined into a genotype-level score in the `GT` comparison type, where an error in either haplotype counts as an error in the `GT` score.
 
 ## Merge command
 In `merge` mode, Aardvark performs comparisons between multiple input sets.
@@ -82,6 +80,13 @@ This labeling occurs on each of the optimized haplotype sequences (i.e., twice),
 Additionally, greater weight is given to variant types with more representation, which may skew the results when indels are split into multiple entries.
 Critically, recall is measured solely by the labels of the truth variants and precision solely by the labels of query variants.
 This means that truth.TP and query.TP may not match if variants are represented differently or have different zygosities.
+
+## Weighted Haplotype
+The weighted haplotype (`WEIGHTED_HAP`) metric is the same as the haplotype (`HAP`) metric except each allele is weighted by the edit distance between the REF and ALT sequences, which effectively provides higher weight to allele changes that impact more basepairs.
+For SNVs, this weight is always 1, so the `HAP` and `WEIGHTED_HAP` scores are identical.
+For indel variant types, the weight is typically the length change relative to the reference allele.
+Thus, a 20 basepair insertion will have 20x the weight of a 1 basepair insertion.
+Conceptually, this is quite similar to the `BASEPAIR` metric, but without allowing for partial-credit matches.
 
 ## Genotype
 The genotype (`GT`) type checks if the total zygosity of ALT variant alleles are accurately detected.

@@ -1,3 +1,10 @@
+# v0.7.4
+## Changes
+- Adds a new scoring mode, `WEIGHTED_HAP`. This scoring mode is similar to `HAP` scoring, but variants are weighted by the number of changes between the REF and ALT sequences. For SNPs, the `HAP` and `WEIGHTED_HAP` scores should be identical since all SNPs have the same weight. For indels, each variant is effectively weighted by its length, so longer variants have an increased weight.
+
+## Fixed
+- Removed an exact-match shortcut in `compare` mode that would occasionally under-estimate the variant-level errors
+
 # v0.7.3
 ## Changes
 - Added REF/ALT trimming of identical tail basepair sequences, which resolves some edge-case variant conflicts in the T2T truth set. This minor change tends to slightly improve the overall accuracy by reducing variant conflicts, allowing for overlapping changes when the trimming removes previously conflicting bases. Some Indel variants may be classified differently compared to previous versions. See the output VCF files for trimmed representations. Examples:

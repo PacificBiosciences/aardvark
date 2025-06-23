@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::data_types::compare_benchmark::CompareBenchmark;
 use crate::data_types::compare_region::CompareRegion;
 use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
-use crate::writers::summary::{COMPARE_BASEPAIR, COMPARE_GT, COMPARE_HAP};
+use crate::writers::summary::{COMPARE_BASEPAIR, COMPARE_GT, COMPARE_HAP, COMPARE_WEIGHTED_HAP};
 
 /// This is a wrapper for writing out summary stats to a file
 pub struct RegionSummaryWriter {
@@ -116,19 +116,25 @@ impl RegionSummaryWriter {
     pub fn write_region_summary(&mut self, region: &CompareRegion, comparison: &CompareBenchmark) -> csv::Result<()> {
         // GT level analysis
         let gt_row = RegionSummaryRow::new_gt(
-            region, COMPARE_GT.to_string(), &comparison.bm_gt()
+            region, COMPARE_GT.to_string(), comparison.group_metrics().gt()
         );        
         self.csv_writer.serialize(&gt_row)?;
 
         // HAP level analysis
         let gt_row = RegionSummaryRow::new(
-            region, COMPARE_HAP.to_string(), &comparison.bm_hap()
+            region, COMPARE_HAP.to_string(), comparison.group_metrics().hap()
         );        
+        self.csv_writer.serialize(&gt_row)?;
+
+        // WEIGHTED_HAP level analysis
+        let gt_row = RegionSummaryRow::new(
+            region, COMPARE_WEIGHTED_HAP.to_string(), comparison.group_metrics().weighted_hap()
+        );
         self.csv_writer.serialize(&gt_row)?;
 
         // basepair level analysis
         let gt_row = RegionSummaryRow::new(
-            region, COMPARE_BASEPAIR.to_string(), &comparison.bm_basepair()
+            region, COMPARE_BASEPAIR.to_string(), comparison.group_metrics().basepair()
         );        
         self.csv_writer.serialize(&gt_row)?;
         Ok(())

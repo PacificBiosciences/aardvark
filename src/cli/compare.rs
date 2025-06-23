@@ -110,6 +110,12 @@ pub struct CompareSettings {
     #[clap(hide = true)] // if you remove this, make sure you re-enable the CLI outputs
     pub max_edit_distance: usize,
 
+    /// Enables an exact-match compute shortcut at the cost of variant-level assessment accuracy
+    #[clap(long = "enable-exact-shortcut")]
+    #[clap(help_heading = Some("Compare parameters"))]
+    #[clap(hide = true)] // if you remove this, make sure you re-enable the CLI outputs
+    pub enable_exact_shortcut: bool,
+
     /// Number of threads to use in the benchmarking step
     #[clap(long = "threads")]
     #[clap(value_name = "THREADS")]
@@ -194,8 +200,11 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     info!("\tMinimum variant gap: {}", settings.min_variant_gap);
     info!("\tVariant trimming: {}", if settings.disable_variant_trimming { "DISABLED "} else { "ENABLED" });
 
-    // info!("Compare parameters:");
-    // info!("\tMax edit distance: {}", settings.max_edit_distance); // we removed this
+    if settings.enable_exact_shortcut {
+        info!("Compare parameters:");
+        // info!("\tMax edit distance: {}", settings.max_edit_distance); // we removed this
+        info!("\tExact match shortcut: {}", if settings.enable_exact_shortcut { "ENABLED" } else { "DISABLED" });
+    }
 
     if settings.threads == 0 {
         settings.threads = 1;
