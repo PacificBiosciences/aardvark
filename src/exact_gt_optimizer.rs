@@ -1,13 +1,14 @@
 
 use anyhow::bail;
-use log::debug;
+use log::{debug, trace};
 use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
 
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::phase_enums::Allele;
 use crate::data_types::variants::Variant;
-use crate::dwfa::haplotype_dwfa::HaplotypeDWFA;
+use crate::dwfa::haplotype_dwfa::{HapDWFAError, HaplotypeDWFA};
 use crate::query_optimizer::order_variants;
 
 /// Result from our exact sequence optimization routine
@@ -113,11 +114,24 @@ pub fn optimize_gt_alleles(
     // track the minimum found allele synchronize point; anything before that has a cost >= the best at that point, and can be safely ignored
     let mut min_allele_sync = 0;
 
+    // track the number of failures at a given sync point, and auto-fail variants that break a limit
+    let mut failed_counts: std::collections::BTreeMap<usize, usize> = Default::default();
+    let auto_fail_threshold = 500;
+    let mut auto_fail_index = 0;
+    let mut auto_fail_counts = 0;
+
+    // track the time here, we have an automatic 5 min failure, but should not hit this with other limits
+    let start = std::time::Instant::now();
+
     // loop while our queue is not empty
     while let Some((current_node, _priority)) = pqueue.pop() {
         if current_node.num_errors() >= best_error_count {
             // the cost of this node is not better than something already found, so skip it
             continue;
+        }
+
+        if start.elapsed().as_secs() > 300 {
+            bail!("300 second time limit reached");
         }
 
         // check which variant we are on
@@ -151,6 +165,32 @@ pub fn optimize_gt_alleles(
         if current_node.is_synchronized() {
             assert!(order_index >= min_allele_sync);
             min_allele_sync = order_index;
+
+            // reset the auto-fail counts and update which index will auto-fail next
+            auto_fail_counts = 0;
+            auto_fail_index = min_allele_sync;
+
+            for (i, c) in failed_counts.iter() {
+                debug!("\t{i} ({:?}) => {c}", all_variant_order[*i]);
+            }
+            failed_counts.clear();
+
+            debug!("New min_allele_sync={min_allele_sync}");
+            debug!("Sync stats: {} / {} => {} / {}",
+                current_node.hap_dwfa().truth_haplotype().alleles().len(),
+                current_node.hap_dwfa().query_haplotype().alleles().len(),
+                current_node.hap_dwfa().truth_haplotype().sequence().len(),
+                current_node.hap_dwfa().query_haplotype().sequence().len()
+            );
+            debug!("Current queue size: {}", pqueue.len());
+            let mut queue_stats: BTreeMap<(usize, usize), usize> = Default::default();
+            for (n, _) in pqueue.iter() {
+                let k = (n.set_alleles(), n.num_errors());
+                *queue_stats.entry(k).or_default() += 1;
+            }
+            for (k, v) in queue_stats.iter() {
+                debug!("\t{k:?} => {v}");
+            }
         }
 
         // now get the relevant variant info depending on truth/query
@@ -186,6 +226,8 @@ pub fn optimize_gt_alleles(
                 if success && new_node.is_exact_match() {
                     let new_priority = new_node.priority();
                     pqueue.push(new_node, new_priority);
+                } else {
+                    *failed_counts.entry(order_index).or_default() += 1;
                 }
             },
             Allele::Alternate => {
@@ -196,6 +238,11 @@ pub fn optimize_gt_alleles(
 
                 // try each extension
                 for (allele, is_error) in extensions.into_iter() {
+                    if order_index < auto_fail_index && allele != Allele::Reference {
+                        // this one need to be Reference only, no matter what; so skip this
+                        continue;
+                    }
+
                     // copy our node and update the ID
                     let mut new_node = current_node.clone();
                     new_node.set_node_id(next_node_id);
@@ -211,10 +258,44 @@ pub fn optimize_gt_alleles(
                     if success && new_node.is_exact_match() {
                         let new_priority = new_node.priority();
                         pqueue.push(new_node, new_priority);
+                    } else {
+                        *failed_counts.entry(order_index).or_default() += 1;
                     }
                 }
             },
         };
+
+        // check if we need to auto-fail an index and clear the queue out a bit
+        auto_fail_counts += 1;
+        if auto_fail_counts >= auto_fail_threshold {
+            let (auto_fail_sub_index, auto_fail_is_truth) = all_variant_order[auto_fail_index];
+            let before_size = pqueue.len();
+            pqueue = pqueue.into_iter()
+                .filter(|(node, _priority)| {
+                    let alleles = if auto_fail_is_truth {
+                        node.hap_dwfa().truth_haplotype().alleles()
+                    } else {
+                        node.hap_dwfa().query_haplotype().alleles()
+                    };
+
+                    let allele = if auto_fail_sub_index < alleles.len() {
+                        alleles[auto_fail_sub_index]
+                    } else {
+                        Allele::Reference
+                    };
+
+                    // only keep the ones that are Reference; i.e. we have "failed" the other
+                    allele == Allele::Reference
+                }).collect();
+
+            // debug messaging
+            let after_size = pqueue.len();
+            trace!("Auto-fail triggered for variant {auto_fail_index}: pqueue size filtered from {before_size} to {after_size}.");
+
+            // now set the next node up for auto-fail tracking
+            auto_fail_index += 1;
+            auto_fail_counts = 0;
+        }
     }
 
     debug!("Fewest errors: {best_error_count}");
@@ -255,7 +336,7 @@ impl ExactMatchNode {
     pub fn new(
         node_id: u64, region_start: usize,
     ) -> Self {
-        let hap_dwfa = HaplotypeDWFA::new(region_start);
+        let hap_dwfa = HaplotypeDWFA::new(region_start, 0);
         Self {
             node_id,
             hap_dwfa,
@@ -273,21 +354,42 @@ impl ExactMatchNode {
     pub fn extend_variant(&mut self,
         reference: &[u8], is_truth: bool,
         variant: &Variant, allele: Allele, sync_extension: Option<usize>, is_error: bool
-    ) -> anyhow::Result<bool> {
-        let extended = self.hap_dwfa.extend_variant(reference, is_truth, variant, allele, sync_extension)?;
+    ) -> Result<bool, HapDWFAError> {
+        let extended = match self.hap_dwfa.extend_variant(reference, is_truth, variant, allele, sync_extension) {
+            Ok(b) => b,
+            Err(e) => {
+                if is_allowed_error(&e) {
+                    assert!(!self.is_exact_match());
+                    false
+                } else {
+                    return Err(e);
+                }
+            },
+        };
         if is_error {
             self.num_errors += 1;
         }
         Ok(extended)
     }
 
-    /// Finalizes the DWFAs, nothing can get added after calling this
+    /// Finalizes the DWFAs, nothing can get added after calling this.
+    /// Returns true if this finalizing was successful and an exact match.
     /// # Arguments
     /// * `reference` - the full reference sequence
     /// * `region_end` - needed to determine how far our region extends out to
-    pub fn finalize_dwfas(&mut self, reference: &[u8], region_end: usize) -> anyhow::Result<()> {
+    pub fn finalize_dwfas(&mut self, reference: &[u8], region_end: usize) -> Result<bool, HapDWFAError> {
         // update each DWFA, translate errors to anyhow
-        self.hap_dwfa.finalize_dwfa(reference, region_end)
+        match self.hap_dwfa.finalize_dwfa(reference, region_end) {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if is_allowed_error(&e) {
+                    assert!(!self.is_exact_match());
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Returns the total cost of the current DWFAs
@@ -335,6 +437,15 @@ impl ExactMatchNode {
     }
 }
 
+/// Returns true if this is a "normal" error from hitting the max edit distance
+fn is_allowed_error(error: &HapDWFAError) -> bool {
+    matches!(
+        error,
+        // list of errors that are allowed
+        HapDWFAError::DError { error: crate::dwfa::dynamic_wfa::DWFAError::MaxEditDistance }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,7 +472,8 @@ mod tests {
 
         // finalize and compare
         comparison_node.finalize_dwfas(reference, reference.len()).unwrap();
-        assert_eq!(comparison_node.edit_distance(), 2);
+        // assert_eq!(comparison_node.edit_distance(), 2); // the ED would be 2 if it did not short-circuit to 1
+        assert_eq!(comparison_node.edit_distance(), 1);
         assert_eq!(comparison_node.num_errors(), 1);
         assert_eq!(comparison_node.hap_dwfa().truth_haplotype().sequence(), reference);
         assert_eq!(comparison_node.hap_dwfa().truth_haplotype().alleles(), &[]);

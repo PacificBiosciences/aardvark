@@ -51,6 +51,12 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
   * `Deletion` - Deletion variant, requires REF to be >1 bp and Alt to be exactly 1 bp
   * `Indel` - Insertion/deletion variant, requires both REF and ALT to be >1 bp
   * `JointIndel` - Group category that includes `Insertion`, `Deletion`, and `Indel` types
+  * `TrExpansion` - Tandem repeat expansion variant, requires TRID tag and ALT >= REF
+  * `TrContraction` - Tandem repeat contraction variant, requires TRID tag and ALT < REF
+  * `JointTandemRepeat` - Group category that includes `TrExpansion` and `TrContraction` types
+  * `SvInsertion` - Structural variant insertion, requires SVTYPE=INS tag and ALT >= REF
+  * `SvDeletion` - Structural variant deletion, requires SVTYPE=DEL tag and ALT <= REF
+  * `JointStructuralVariant` - Group category that includes `SvInsertion` and `SvDeletion` types
   * `ALL` - Group category that includes all variants types
 * `truth_total` - The total number of truth values that were assessed.
 * `truth_tp` - The number of truth values that were also identified in the query set, indicating a true positive (TP).

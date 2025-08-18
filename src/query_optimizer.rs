@@ -115,6 +115,8 @@ pub fn optimize_sequences(
     truth_variants: &[Variant], truth_zygosity: &[PhasedZygosity],
     query_variants: &[Variant], query_zygosity: &[PhasedZygosity],
 ) -> anyhow::Result<Vec<OptimizedHaplotypes>> {
+    debug!("Starting sequence optimization...");
+
     // do some sanity checks
     if truth_variants.len() != truth_zygosity.len() {
         bail!("truth values must have equal length");
@@ -146,7 +148,7 @@ pub fn optimize_sequences(
     // this tracks how many nodes of length L are encountered, and ignores any beyond our heuristic cutoff
     // in testing, this just prevent exponential blowup from purely FP variants in query
     let max_per_bucket = 50; // TODO: CLI option
-    let mut bucket_counts = vec![0; total_variant_count];
+    let mut bucket_counts = vec![0; total_variant_count+1];
 
     // loop while our queue is not empty
     while let Some((current_node, _priority)) = pqueue.pop() {
@@ -157,6 +159,22 @@ pub fn optimize_sequences(
 
         // check which variant we are on
         let order_index = current_node.set_alleles();
+        if bucket_counts[order_index] == 0 {
+            debug!("Best path to {order_index} = {:?}, {} <?> {}, {} <?> {}",
+                current_node.priority(),
+                current_node.hap_dwfa1().truth_haplotype().sequence().len(),
+                current_node.hap_dwfa1().query_haplotype().sequence().len(),
+                current_node.hap_dwfa2().truth_haplotype().sequence().len(),
+                current_node.hap_dwfa2().query_haplotype().sequence().len()
+            );
+        }
+
+        // make sure we didn't fill our quota for this bucket size
+        if bucket_counts[order_index] >= max_per_bucket {
+            continue;
+        }
+        bucket_counts[order_index] += 1;
+
         if order_index == total_variant_count {
             // we did every variant, time to finalize the node
             let mut final_node = current_node;
@@ -178,12 +196,6 @@ pub fn optimize_sequences(
             };
             continue;
         }
-
-        // make sure we didn't fill our quota for this bucket size
-        if bucket_counts[order_index] >= max_per_bucket {
-            continue;
-        }
-        bucket_counts[order_index] += 1;
 
         // now get the relevant variant info depending on truth/query
         let (variant_index, is_truth) = all_variant_order[order_index];
@@ -364,8 +376,8 @@ impl ComparisonNode {
     pub fn new(
         node_id: u64, region_start: usize,
     ) -> Self {
-        let hap_dwfa1 = HaplotypeDWFA::new(region_start);
-        let hap_dwfa2 = HaplotypeDWFA::new(region_start);
+        let hap_dwfa1 = HaplotypeDWFA::new(region_start, usize::MAX);
+        let hap_dwfa2 = HaplotypeDWFA::new(region_start, usize::MAX);
         Self {
             node_id,
             hap_dwfa1,
@@ -398,7 +410,8 @@ impl ComparisonNode {
     pub fn finalize_dwfas(&mut self, reference: &[u8], region_end: usize) -> anyhow::Result<()> {
         // update each DWFA, translate errors to anyhow
         self.hap_dwfa1.finalize_dwfa(reference, region_end)?;
-        self.hap_dwfa2.finalize_dwfa(reference, region_end)
+        self.hap_dwfa2.finalize_dwfa(reference, region_end)?;
+        Ok(())
     }
 
     /// Returns the total cost of the current DWFAs

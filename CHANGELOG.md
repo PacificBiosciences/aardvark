@@ -1,3 +1,22 @@
+# v0.8.0
+## Changes
+- Adds beta support for medium-sized variant types (<= 10 kbp):
+  - `SvDeletion` and `SvInsertion` - Structural variants identified by the `SVTYPE` tag in the provided VCF files
+  - `TrContraction` and `TrExpansion` - Tandem repeat variants identified by a `TRID` tag in the provided VCF files
+  - Add `JointStructuralVariant` and `JointTandemRepeat` types, which are similar to `JointIndel`
+  - Including these larger variant types increase the compute cost of Aardvark
+- Adds additional heuristic limitation to reduce compute costs from larger variant types:
+  - Adds a filter on variants larger than 10 kbp
+  - Adds a short-circuit for GT candidate scoring such that any edits immediately ends the candidate exploration
+  - Adds a limit on the number of candidates that can get generated before a sync point is identified in GT scoring, preventing exponentially blow-up of GT scoring when large variants mismatch
+  - Adds filter on variants that are not sequence resolved (e.g., "<DEL>" entry is not supported)
+
+## Fixed
+- Updates `noodles` crate to resolve some parsing issues:
+  - Fixed issue with parsing `SVLEN` field
+  - Fixed a VCF parsing issue where absent chromosomes would error instead of gracefully returning no variants
+- Updated build to `rust:1.88.0` to resolve some compilation issues
+
 # v0.7.4
 ## Changes
 - Adds a new scoring mode, `WEIGHTED_HAP`. This scoring mode is similar to `HAP` scoring, but variants are weighted by the number of changes between the REF and ALT sequences. For SNPs, the `HAP` and `WEIGHTED_HAP` scores should be identical since all SNPs have the same weight. For indels, each variant is effectively weighted by its length, so longer variants have an increased weight.

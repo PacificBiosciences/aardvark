@@ -1,6 +1,6 @@
 [package]
 name = "aardvark"
-version = "0.7.4"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 description = "Aardvark - A tool for sniffing out the differences in vari-Ants"
@@ -26,8 +26,8 @@ indicatif = {version = "0.17.11", features = ["rayon"]}
 itertools = "0.14.0"
 lazy_static = "1.5.0"
 log = "0.4.27"
-noodles = { version = "0.96.0", features = ["bed", "bgzf", "core", "tabix", "vcf"] }
-noodles-util = { version = "0.65.0", features = ["variant"] }
+noodles = { version = "0.100.0", features = ["bed", "bgzf", "core", "tabix", "vcf"] }
+noodles-util = { version = "0.69.0", features = ["variant"] }
 priority-queue = "2.3.1"
 rayon = "1.10.0"
 rust-lib-reference-genome = { tag = "v0.2.0", git = "https://github.com/holtjma/rust-lib-reference-genome.git" }

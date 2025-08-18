@@ -10,7 +10,7 @@ use crate::data_types::compare_region::CompareRegion;
 /// This is a wrapper for writing out summary stats to a file
 pub struct RegionSequenceWriter {
     /// Handle on the writer
-    csv_writer: csv::Writer<bgzf::MultithreadedWriter<File>>,
+    csv_writer: csv::Writer<bgzf::io::MultithreadedWriter<File>>,
 }
 
 /// Contains all the data written to each row of our stats file
@@ -53,7 +53,7 @@ impl RegionSequenceWriter {
     pub fn new(filename: &Path, threads: usize) -> anyhow::Result<Self> {
         let delimiter: u8 = b'\t';
         let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
-        let gzip_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, File::create(filename)?);
+        let gzip_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, File::create(filename)?);
         let csv_writer= csv::WriterBuilder::new()
             .delimiter(delimiter)
             .from_writer(gzip_writer);

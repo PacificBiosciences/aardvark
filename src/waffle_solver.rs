@@ -16,11 +16,15 @@ use crate::query_optimizer::{optimize_sequences, OptimizedHaplotypes};
 use crate::util::sequence_alignment::wfa_ed;
 
 /// These are the variants we currently allow
-const SUPPORTED_VARIANT_TYPES: [VariantType; 4] = [
+const SUPPORTED_VARIANT_TYPES: [VariantType; 8] = [
     VariantType::Snv,
     VariantType::Insertion,
     VariantType::Deletion,
-    VariantType::Indel
+    VariantType::Indel,
+    VariantType::TrContraction,
+    VariantType::TrExpansion,
+    VariantType::SvDeletion,
+    VariantType::SvInsertion
 ];
 
 /// Controls what passes our merging process

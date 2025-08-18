@@ -3,7 +3,7 @@ use anyhow::{Context, anyhow};
 use indexmap::IndexMap;
 use log::debug;
 use noodles::bed::io::reader::Builder as BedBuilder;
-use noodles::bed::{Reader as BedReader, Record as BedRecord};
+use noodles::bed::{io::Reader as BedReader, Record as BedRecord};
 use noodles::core::region::Interval;
 use std::io::BufReader;
 use std::path::Path;

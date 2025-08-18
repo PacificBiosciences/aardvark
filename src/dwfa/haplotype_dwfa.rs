@@ -1,10 +1,16 @@
 
-use anyhow::bail;
-
 use crate::data_types::phase_enums::Allele;
 use crate::data_types::variants::Variant;
-use crate::dwfa::dynamic_wfa::DWFALite;
+use crate::dwfa::dynamic_wfa::{DWFAError, DWFALite};
 use crate::util::sequence_alignment::edit_distance;
+
+#[derive(thiserror::Error, Debug)]
+pub enum HapDWFAError {
+    #[error("error from DWFA: {error}")]
+    DError { error: DWFAError },
+    #[error("cannot extend Allele::Unknown")]
+    UnknownAllele,
+}
 
 /// Haplotype-specific details. This node does not track the comparators for efficiency, so they must be provided with each call.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -21,12 +27,12 @@ impl HaplotypeDWFA {
     /// Constructor
     /// # Arguments
     /// * `region_start` - reference start of this DWFA
-    pub fn new(region_start: usize) -> Self {
+    pub fn new(region_start: usize, max_edit_distance: usize) -> Self {
         Self {
             truth_haplotype: HaplotypeTracker::new(region_start),
             query_haplotype: HaplotypeTracker::new(region_start),
             // no wildcards, and we want end-to-end without early termination
-            dwfa: DWFALite::default()
+            dwfa: DWFALite::with_max_edit_distance(max_edit_distance)
         }
     }
 
@@ -37,7 +43,7 @@ impl HaplotypeDWFA {
     /// * `variant` - the variant we are traversing
     /// * `allele` - the REF/ALT indication
     /// * `sync_extension` - if provided, this will further copy the reference sequence to both truth and query
-    pub fn extend_variant(&mut self, reference: &[u8], is_truth: bool, variant: &Variant, allele: Allele, sync_extension: Option<usize>) -> anyhow::Result<bool> {
+    pub fn extend_variant(&mut self, reference: &[u8], is_truth: bool, variant: &Variant, allele: Allele, sync_extension: Option<usize>) -> Result<bool, HapDWFAError> {
         // extend the appropriate haplotype
         let success = if is_truth {
             // extend our query by the reference up to the sync point, passing the sync point also
@@ -63,24 +69,29 @@ impl HaplotypeDWFA {
     /// Updates the contained DWFA after a change to the internally tracked sequence.
     /// # Arguments
     /// * `baseline` - the baseline sequence we compare against
-    fn update_dwfa(&mut self) -> anyhow::Result<()> {
+    fn update_dwfa(&mut self) -> Result<(), HapDWFAError> {
         // update each DWFA, translate errors to anyhow
-        self.dwfa.update(self.truth_haplotype.sequence(), self.query_haplotype.sequence())?;
-        Ok(())
+        match self.dwfa.update(self.truth_haplotype.sequence(), self.query_haplotype.sequence()) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(HapDWFAError::DError { error })
+        }
     }
 
     /// Fills out the rest of the region with reference sequence and then finalizes the DWFA.
     /// # Arguments
     /// * `reference` - the full reference sequence
     /// * `region_end` - the end position of the region
-    pub fn finalize_dwfa(&mut self, reference: &[u8], region_end: usize) -> anyhow::Result<()> {
+    pub fn finalize_dwfa(&mut self, reference: &[u8], region_end: usize) -> Result<(), HapDWFAError> {
         // add any remaining reference sequence
         self.truth_haplotype.copy_reference(reference, region_end)?;
         self.query_haplotype.copy_reference(reference, region_end)?;
         self.update_dwfa()?;
 
         // finalize the DWFA, translate errors to anyhow
-        self.dwfa.finalize(self.truth_haplotype.sequence(), self.query_haplotype.sequence())
+        match self.dwfa.finalize(self.truth_haplotype.sequence(), self.query_haplotype.sequence()) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(HapDWFAError::DError { error })
+        }
     }
 
     /// Returns true if the sequences are identical AND they are waiting at the same reference position.
@@ -161,14 +172,14 @@ impl HaplotypeTracker {
     /// * `variant` - the variant we are traversing
     /// * `allele` - the REF/ALT indication
     /// * `ref_extension` - if provided, this will further copy the reference sequence after the allele is added through the provided position
-    pub fn extend_variant(&mut self, reference: &[u8], variant: &Variant, allele: Allele, ref_extension: Option<usize>) -> anyhow::Result<bool> {
+    pub fn extend_variant(&mut self, reference: &[u8], variant: &Variant, allele: Allele, ref_extension: Option<usize>) -> Result<bool, HapDWFAError> {
         // no matter what, we can always add reference sequence up to the variant start
         let variant_start = variant.position() as usize;
         self.copy_reference(reference, variant_start)?;
 
         // extend hap1 by the corresponding allele
         let success = match allele {
-            Allele::Unknown => bail!("Cannot extend Allele::Unknown"),
+            Allele::Unknown => return Err(HapDWFAError::UnknownAllele),
             Allele::Reference => {
                 // reference allele, so nothing to add
                 true
@@ -204,7 +215,7 @@ impl HaplotypeTracker {
     /// # Arguments
     /// * `reference` - the full reference sequence
     /// * `region_end` - the end position of the region
-    pub fn copy_reference(&mut self, reference: &[u8], region_end: usize) -> anyhow::Result<()> {
+    pub fn copy_reference(&mut self, reference: &[u8], region_end: usize) -> Result<(), HapDWFAError> {
         // add any remaining reference sequence
         if self.ref_pos < region_end {
             // first update the reference sequence to this point
@@ -246,7 +257,7 @@ mod tests {
 
         // add the variant to both truth and query
         let variant = Variant::new_snv(0, 6, b"G".to_vec(), b"A".to_vec()).unwrap();
-        let mut hap_node = HaplotypeDWFA::new(region_start); // start with first 'T'
+        let mut hap_node = HaplotypeDWFA::new(region_start, usize::MAX); // start with first 'T'
         hap_node.extend_variant(
             reference, true,
             &variant, Allele::Alternate, None
@@ -292,7 +303,7 @@ mod tests {
 
         // add the variant to both truth and query
         let variant = Variant::new_snv(0, 6, b"G".to_vec(), b"A".to_vec()).unwrap();
-        let mut hap_node = HaplotypeDWFA::new(region_start); // start with first 'T'
+        let mut hap_node = HaplotypeDWFA::new(region_start, usize::MAX); // start with first 'T'
         hap_node.extend_variant(
             reference, true,
             &variant, Allele::Alternate, None

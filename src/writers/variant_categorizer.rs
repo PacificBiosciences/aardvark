@@ -33,7 +33,7 @@ pub struct VariantCategorizer {
     /// Header that goes into the VCF
     vcf_header: vcf::Header,
     /// The actual writer
-    vcf_writer: vcf::io::Writer<bgzf::MultithreadedWriter<File>>
+    vcf_writer: vcf::io::Writer<bgzf::io::MultithreadedWriter<File>>
 }
 
 impl VariantCategorizer {
@@ -59,7 +59,7 @@ impl VariantCategorizer {
 
         // constants we add
         let ver: &str = crate::cli::core::FULL_VERSION.as_str(); // clippy gets weird about direct access
-        let cli_version = format!("\"{}\"", ver);
+        let cli_version = format!("\"{ver}\"");
         let cli_string = format!("\"{}\"", std::env::args().collect::<Vec<String>>().join(" "));
         let extra_header = [
             (
@@ -121,7 +121,7 @@ impl VariantCategorizer {
 
             let file = File::create(&vcf_fn)?;
             let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
-            let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
+            let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, file);
             let mut vcf_writer = vcf::io::Writer::new(bgzf_writer);
 
             // write the header based on the data source
