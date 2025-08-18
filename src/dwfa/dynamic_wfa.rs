@@ -1,6 +1,13 @@
 
 use rustc_hash::FxHashMap as HashMap;
-use anyhow::bail;
+
+#[derive(thiserror::Error, Debug)]
+pub enum DWFAError {
+    #[error("maximum edit distance exceeded")]
+    MaxEditDistance,
+    #[error("DWFA is already finalized, it cannot be changed further")]
+    AlreadyFinalized,
+}
 
 /// The core dynamic WFA structure for a lite implementation.
 /// It is structured such that all the sequences being built are maintained **outside** of this struct (hence the "lite").
@@ -26,7 +33,9 @@ pub struct DWFALite {
     /// Finalizing, will force it into the final corner, touching both.
     wavefront: Vec<usize>,
     /// If true, this DWFA has been finalized, meaning it cannot be extended anymore.
-    is_finalized: bool
+    is_finalized: bool,
+    /// The maximum allowed edit distance before throwing an error
+    max_edit_distance: usize
 }
 
 impl Default for DWFALite {
@@ -34,13 +43,21 @@ impl Default for DWFALite {
         DWFALite {
             edit_distance: 0,
             wavefront: vec![0],
-            is_finalized: false
+            is_finalized: false,
+            max_edit_distance: usize::MAX
         }
     }
 }
     
 
 impl DWFALite {
+    pub fn with_max_edit_distance(max_edit_distance: usize) -> Self {
+        Self {
+            max_edit_distance,
+            ..Default::default()
+        }
+    }
+
     /// This is the main function to extend the WFA with a new symbol.
     /// This function will handle all of the extending and potential edit distance increases as well.
     /// # Arguments
@@ -48,9 +65,9 @@ impl DWFALite {
     /// * `other_seq` - the other sequence, typically getting updates
     /// # Errors
     /// * If this function is called after `finalize()` has been called.
-    pub fn update(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> anyhow::Result<usize> {
+    pub fn update(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<usize, DWFAError> {
         if self.is_finalized {
-            bail!("Cannot push more bases after finalizing a DWFA");
+            return Err(DWFAError::AlreadyFinalized);
         }
 
         // maximally extend everything along the current diagonals
@@ -74,7 +91,7 @@ impl DWFALite {
     /// * `other_seq` - the other sequence, typically getting updates
     /// # Errors
     /// * None so far
-    fn extend(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> anyhow::Result<()> {
+    fn extend(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<(), DWFAError> {
         // this is easier logic than trying to handle the option syntax below
         for (i, d) in self.wavefront.iter_mut().enumerate() {
             // `i` is the index in the wavefront
@@ -119,12 +136,17 @@ impl DWFALite {
     /// * `other_seq` - the other sequence
     /// # Errors
     /// * If the DWFA is already finalized
-    fn increase_edit_distance(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> anyhow::Result<()> {
+    /// * If we exceed the maximum edit distance
+    fn increase_edit_distance(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<(), DWFAError> {
         if self.is_finalized {
-            bail!("Cannot increase edit distance after finalizing a DWFA");
+            return Err(DWFAError::AlreadyFinalized);
         }
+
         // first, increase the distance we're at
         self.edit_distance += 1;
+        if self.edit_distance > self.max_edit_distance {
+            return Err(DWFAError::MaxEditDistance);
+        }
 
         // create an empty new wavefront
         let new_wf_len = self.wavefront.len() + 2;
@@ -158,9 +180,9 @@ impl DWFALite {
     /// * `other_seq` - the other sequence
     /// # Errors
     /// * If the edit distance cannot be increased further and it needs to be.
-    pub fn finalize(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> anyhow::Result<()> {
+    pub fn finalize(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<(), DWFAError> {
         if self.is_finalized {
-            bail!("Cannot finalize a DWFA twice.");
+            return Err(DWFAError::AlreadyFinalized);
         }
 
         // always try to extend before finalizing

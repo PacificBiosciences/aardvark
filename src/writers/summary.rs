@@ -175,21 +175,42 @@ impl SummaryWriter {
             .from_path(filename)?;
 
         // joint indel sub-categories
-        let joint_label = "JointIndel".to_string();
-        let joint_types = [VariantType::Insertion, VariantType::Deletion, VariantType::Indel];
+        let joint_indel_label = "JointIndel".to_string();
+        let joint_indel_types = [VariantType::Insertion, VariantType::Deletion, VariantType::Indel];
+
+        // joint tandem repeat sub-categories
+        let joint_tr_label = "JointTandemRepeat".to_string();
+        let joint_tr_types = [VariantType::TrExpansion, VariantType::TrContraction];
+
+        // joint structural variant sub-categories
+        let joint_sv_label = "JointStructuralVariant".to_string();
+        let joint_sv_types = [
+            VariantType::SvInsertion,
+            VariantType::SvDeletion,
+            VariantType::SvDuplication,
+            VariantType::SvInversion,
+            VariantType::SvBreakend,
+        ];
+
+        // construct the joint categories
+        let joint_categories = [
+            (joint_indel_label.clone(), joint_indel_types.as_slice()),
+            (joint_sv_label.clone(), joint_sv_types.as_slice()),
+            (joint_tr_label.clone(), joint_tr_types.as_slice()),
+        ];
 
         // first, write the ALL group
         write_group(
             &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), "ALL".to_string(),
             &self.all_metrics,
-            joint_label.clone(), &joint_types
+            &joint_categories
         )?;
 
         for (strat_label, strat_result) in self.strat_metrics.iter() {
             write_group(
                 &mut csv_writer, self.compare_label.clone(), "ALL".to_string(), strat_label.clone(),
                 strat_result,
-                joint_label.clone(), &joint_types
+                &joint_categories
             )?;
         }
 
@@ -218,40 +239,39 @@ impl SummaryWriter {
 /// * `compare_label` - user provided comparison label, fixed
 /// * `filter` - pass through to filter field of row, this is either "ALL" or one of the stratification labels
 /// * `group_metrics` - the group metrics
-/// * `joint_label` - a joint label for a special row
-/// * `joint_types` - the variant types that get added together for the joint row
+/// * `joint_categories` - vector of (label, types) tuples for joint categories
 fn write_group(
     csv_writer: &mut csv::Writer<File>,
     compare_label: String, filter: String, region_label: String,
     group_metrics: &GroupMetrics,
-    joint_label: String, joint_types: &[VariantType],
+    joint_categories: &[(String, &[VariantType])],
 ) -> anyhow::Result<()> {
     // GT level analysis
     write_gt_category(
         csv_writer, compare_label.clone(), filter.clone(), COMPARE_GT.to_string(), region_label.clone(),
         group_metrics.gt(), group_metrics.variant_gt(),
-        joint_label.clone(), joint_types
+        joint_categories
     )?;
 
     // Haplotype level analysis
     write_category(
         csv_writer, compare_label.clone(), filter.clone(), COMPARE_HAP.to_string(), region_label.clone(),
         group_metrics.hap(), group_metrics.variant_hap(),
-        joint_label.clone(), joint_types
+        joint_categories
     )?;
 
     // Weighted Haplotype level analysis
     write_category(
         csv_writer, compare_label.clone(), filter.clone(), COMPARE_WEIGHTED_HAP.to_string(), region_label.clone(),
         group_metrics.weighted_hap(), group_metrics.variant_weighted_hap(),
-        joint_label.clone(), joint_types
+        joint_categories
     )?;
 
     // Basepair level analysis
     write_category(
         csv_writer, compare_label, filter, COMPARE_BASEPAIR.to_string(), region_label,
         group_metrics.basepair(), group_metrics.variant_basepair(),
-        joint_label, joint_types
+        joint_categories
     )?;
     Ok(())
 }
@@ -264,15 +284,14 @@ fn write_group(
 /// * `comparison_type` - pass through to comparison in row
 /// * `full_metrics` - the summary for all metric types
 /// * `type_metrics` - variant-specific metrics
-/// * `joint_label` - a joint label for a special row
-/// * `joint_types` - the variant types that get added together for the joint row
+/// * `joint_categories` - vector of (label, types) tuples for joint categories
 #[allow(clippy::too_many_arguments)]
 fn write_category(
     csv_writer: &mut csv::Writer<File>,
     compare_label: String, filter: String, comparison_type: String, region_label: String,
     full_metrics: &SummaryMetrics,
     type_metrics: &BTreeMap<VariantType, SummaryMetrics>,
-    joint_label: String, joint_types: &[VariantType],
+    joint_categories: &[(String, &[VariantType])],
 ) -> csv::Result<()> {
     // write the row for all variants
     let all_row = SummaryRow::new(
@@ -282,7 +301,6 @@ fn write_category(
     csv_writer.serialize(&all_row)?;
 
     // variant-specific metrics
-    let mut joint_metrics = SummaryMetrics::default();
     for (variant_type, metrics) in type_metrics.iter() {
         if metrics.is_empty() {
             // do not write a row if there's nothing to write
@@ -294,18 +312,26 @@ fn write_category(
             metrics
         );
         csv_writer.serialize(&v_row)?;
-
-        if joint_types.contains(variant_type) {
-            joint_metrics += *metrics;
-        }
     }
 
-    // we also have the joint indel row
-    let joint_row = SummaryRow::new(
-        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label,
-        &joint_metrics
-    );
-    csv_writer.serialize(&joint_row)?;
+    // write joint category rows
+    for (joint_label, joint_types) in joint_categories {
+        let mut joint_metrics = SummaryMetrics::default();
+        for variant_type in joint_types.iter() {
+            if let Some(metrics) = type_metrics.get(variant_type) {
+                joint_metrics += *metrics;
+            }
+        }
+
+        // only write the row if there's something to write
+        if !joint_metrics.is_empty() {
+            let joint_row = SummaryRow::new(
+                compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label.clone(),
+                &joint_metrics
+            );
+            csv_writer.serialize(&joint_row)?;
+        }
+    }
 
     Ok(())
 }
@@ -318,15 +344,14 @@ fn write_category(
 /// * `comparison_type` - pass through to comparison in row
 /// * `full_metrics` - the summary for all metric types
 /// * `type_metrics` - variant-specific metrics
-/// * `joint_label` - a joint label for a special row
-/// * `joint_types` - the variant types that get added together for the joint row
+/// * `joint_categories` - vector of (label, types) tuples for joint categories
 #[allow(clippy::too_many_arguments)]
 fn write_gt_category(
     csv_writer: &mut csv::Writer<File>,
     compare_label: String, filter: String, comparison_type: String, region_label: String,
     full_metrics: &SummaryGtMetrics,
     type_metrics: &BTreeMap<VariantType, SummaryGtMetrics>,
-    joint_label: String, joint_types: &[VariantType],
+    joint_categories: &[(String, &[VariantType])],
 ) -> anyhow::Result<()> {
     ensure!(comparison_type.as_str() == "GT", "write_gt_category requires a GT input");
 
@@ -338,25 +363,32 @@ fn write_gt_category(
     csv_writer.serialize(&all_row)?;
 
     // variant-specific metrics
-    let mut joint_metrics = SummaryGtMetrics::default();
     for (variant_type, metrics) in type_metrics.iter() {
         let v_row = SummaryRow::new_gt(
             compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), format!("{variant_type:?}"),
             metrics
         );
         csv_writer.serialize(&v_row)?;
-
-        if joint_types.contains(variant_type) {
-            joint_metrics += *metrics;
-        }
     }
 
-    // we also have the joint indel row
-    let joint_row = SummaryRow::new_gt(
-        compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label,
-        &joint_metrics
-    );
-    csv_writer.serialize(&joint_row)?;
+    // write joint category rows
+    for (joint_label, joint_types) in joint_categories {
+        let mut joint_metrics = SummaryGtMetrics::default();
+        for variant_type in joint_types.iter() {
+            if let Some(metrics) = type_metrics.get(variant_type) {
+                joint_metrics += *metrics;
+            }
+        }
+
+        // only write the row if there's something to write
+        if !joint_metrics.summary_metrics.is_empty() {
+            let joint_row = SummaryRow::new_gt(
+                compare_label.clone(), comparison_type.clone(), region_label.clone(), filter.clone(), joint_label.clone(),
+                &joint_metrics
+            );
+            csv_writer.serialize(&joint_row)?;
+        }
+    }
 
     Ok(())
 }

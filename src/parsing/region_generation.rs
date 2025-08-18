@@ -488,13 +488,39 @@ impl Iterator for RegionIterator {
 /// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
 fn load_variants_in_region(
     vcf_header: &vcf::Header,
-    vcf_reader: &mut VcfReader<noodles::bgzf::Reader<File>>,
+    vcf_reader: &mut VcfReader<noodles::bgzf::io::Reader<File>>,
     sample_index: usize,
     region: &Region,
     enable_trimming: bool
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
+    // first, check if the sequence name is in the index
+    // this is does outside the Err(e) because of borrow checking
+    let index = vcf_reader.index();
+    let seqname_absent = if let Some(index_header) = index.header() {
+        let seq_names = index_header.reference_sequence_names();
+        !seq_names.contains(region.name())
+    } else {
+        false
+    };
+
+    // now try to run the query
     let mut ret: Vec<(Variant, PhasedZygosity)> = Default::default();
-    for result in vcf_reader.query(vcf_header, region)? {
+    let query = match vcf_reader.query(vcf_header, region) {
+        Ok(q) => q,
+        Err(e) => {
+            // check if this is an absent sequence name in the tabix index
+            if seqname_absent {
+                // the index does not have the seq name, so it is likely empty
+                trace!("Error while fetching region, likely empty: {e:?}");
+                return Ok(Default::default());
+            } else {
+                // seq name is present, this is likely some other error to propagate upstream
+                return Err(e.into());
+            }
+        }
+    };
+
+    for result in query {
         let record: Box<dyn vcf::variant::Record> = result?;
         let record_buf = vcf::variant::RecordBuf::try_from_variant_record(vcf_header, record.as_ref())?;
     
@@ -528,7 +554,7 @@ fn parse_variant(
     enable_trimming: bool
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     // variant level column
-    let chrom = record.reference_bases();
+    let chrom = record.reference_sequence_name();
     let pos = record.variant_start().ok_or(anyhow!("Missing POS"))?; // 1-based
     let ref_seq = record.reference_bases();
     let alts = record.alternate_bases().as_ref();
@@ -536,9 +562,14 @@ fn parse_variant(
     // sample specific information
     let all_samples = record.samples();
     let sample = all_samples.get_index(sample_index).unwrap();
-    let gt = sample.get(vcf_key::GENOTYPE)
-        .ok_or(anyhow!("Missing GT"))?
-        .ok_or(anyhow!("Sample missing GT"))?;
+    let gt = match sample.get(vcf_key::GENOTYPE)
+        .ok_or(anyhow!("Missing GT"))? {
+        Some(gt) => gt,
+        None => {
+            // this entry's GT = '.', which is a no-op for us
+            return Ok(Default::default());
+        }
+    };
 
     trace!("{chrom}\t{pos}\t{ref_seq:?}\t{alts:?}\tGT={gt:?}");
 
@@ -555,6 +586,10 @@ fn parse_variant(
 
         let mut ref_sequence = ref_seq.as_bytes().to_vec();
         let mut alt_sequence = alts[alt_index-1].as_bytes().to_vec();
+        if alt_sequence[0] == b'<' {
+            // e.g. <INV>; we need sequence-resolved
+            continue;
+        }
         let position = (pos.get() - 1) as u64; // convert to 0-based
 
         // trim off any extra bases at the end
@@ -563,13 +598,31 @@ fn parse_variant(
             assert!(alt_sequence.pop().is_some());
         }
 
+        // TODO: do we want to parameterize this?
+        let allele_size_limit = 10000;
+        if ref_sequence.len() > allele_size_limit || alt_sequence.len() > allele_size_limit {
+            debug!("Ignoring variant at {chrom}:{pos} {}>{}", ref_sequence.len(), alt_sequence.len());
+            // TODO: do we care to track the number of variant ignored due to length?
+            continue;
+        }
+
         let variant_type = get_variant_type(record, &ref_sequence, &alt_sequence)?;
         let variant = match variant_type {
             VariantType::Snv => Variant::new_snv(0, position, ref_sequence, alt_sequence),
             VariantType::Insertion => Variant::new_insertion(0, position, ref_sequence, alt_sequence),
             VariantType::Deletion => Variant::new_deletion(0, position, ref_sequence, alt_sequence),
             VariantType::Indel => Variant::new_indel(0, position, ref_sequence, alt_sequence),
-            _ => panic!("No impl for {variant_type:?}")
+            VariantType::TrContraction => Variant::new_tr_contraction(0, position, ref_sequence, alt_sequence),
+            VariantType::TrExpansion => Variant::new_tr_expansion(0, position, ref_sequence, alt_sequence),
+            VariantType::SvDeletion => Variant::new_sv_deletion(0, position, ref_sequence, alt_sequence),
+            VariantType::SvInsertion => Variant::new_sv_insertion(0, position, ref_sequence, alt_sequence),
+            // here are the ones we explicitly are not supporting at this time
+            VariantType::SvBreakend |
+            VariantType::SvDuplication => {
+                continue;
+            },
+            // Whenever you add a new VariantType, update `SUPPORTED_VARIANT_TYPES` in waffle_solver.rs
+            _ => bail!("No impl for {variant_type:?}")
         }?;
 
         ret.push((variant, zygosity));
@@ -643,26 +696,40 @@ fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> anyh
 fn get_variant_type(record: &vcf::variant::RecordBuf, ref_sequence: &[u8], alt_sequence: &[u8]) -> anyhow::Result<VariantType> {
     use vcf::variant::record::info::field::key as info_key;
 
-    // check for SVs, which we are not supporting yet
+    // check for SVs, some of which are supported
     let opt_sv_type = record.info().get(info_key::SV_TYPE);
     if let Some(Some(sv_type)) = opt_sv_type {
-        bail!("SVs are not yet supported: {sv_type:?}");
-        // we can copy HiPhase logic if we desire
+        let vt = match sv_type {
+            vcf::variant::record_buf::info::field::Value::String(s) => {
+                match s.as_str() {
+                    "BND" => VariantType::SvBreakend,
+                    "DEL" => VariantType::SvDeletion,
+                    "DUP" => VariantType::SvDuplication,
+                    "INS" => VariantType::SvInsertion,
+                    _ => bail!("Unsupported SVTYPE detected: {sv_type:?}")
+                }
+            },
+            _ => bail!("Unsupported SVTYPE detected: {sv_type:?}")
+        };
+        return Ok(vt);
     }
 
-    // check for STRs, which we are not supporting yet
+    // check for STRs, which are split into TrContraction and TrExpansion base on the length of the REF/ALT sequences
     let opt_trid = record.info().get("TRID");
-    if let Some(Some(trid)) = opt_trid {
-        bail!("STRs are not yet supported: {trid:?}");
-        // we can copy HiPhase logic if we desire
-    }
-
-    let vt = match (ref_sequence.len(), alt_sequence.len()) {
-        (0, _) | (_, 0) => bail!("cannot have alleles with 0 length"),
-        (1, 1) => VariantType::Snv,
-        (1, _) => VariantType::Insertion,
-        (_, 1) => VariantType::Deletion,
-        (_, _) => VariantType::Indel
+    let vt = if let Some(Some(_trid)) = opt_trid {
+        if alt_sequence.len() < ref_sequence.len() {
+            VariantType::TrContraction
+        } else {
+            VariantType::TrExpansion
+        }
+    } else {
+        match (ref_sequence.len(), alt_sequence.len()) {
+            (0, _) | (_, 0) => bail!("cannot have alleles with 0 length"),
+            (1, 1) => VariantType::Snv,
+            (1, _) => VariantType::Insertion,
+            (_, 1) => VariantType::Deletion,
+            (_, _) => VariantType::Indel
+        }
     };
     Ok(vt)
 }

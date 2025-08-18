@@ -1,5 +1,5 @@
-use crate::util::sequence_alignment::wfa_ed;
 
+use crate::util::sequence_alignment::wfa_ed;
 
 /// All the variant types we are currently allowing
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -22,8 +22,10 @@ pub enum VariantType {
     SvInversion,
     /// Must have two alleles and be tagged with SVTYPE=BND
     SvBreakend,
-    /// Must have two alleles and be tagged with TRID=####
-    TandemRepeat,
+    /// Must have two alleles and be tagged with TRID=####, ALT < REF
+    TrContraction,
+    // Must have two alleles and be tagged with TRID=####, ALT >= REF
+    TrExpansion,
     /// Something that doesn't match the above criteria, must be 1 or 2 alleles
     Unknown // make sure Unknown is always the last one in the list
 }
@@ -56,7 +58,11 @@ pub enum VariantError {
     #[error("SV deletion ALT length must be <= REF length")]
     SvDeletionLen,
     #[error("SV insertion ALT length must be >= REF length")]
-    SvInsertionLen
+    SvInsertionLen,
+    #[error("TR contraction ALT length must be < REF length")]
+    TrContractionLen,
+    #[error("TR expansion ALT length must be >= REF length")]
+    TrExpansionLen
 }
 
 /// A variant definition structure.
@@ -261,7 +267,7 @@ impl Variant {
         })
     }
 
-    /// Creates a new tandem repeat variant, functionally these act very similar to indel types.
+    /// Creates a new tandem repeat contraction variant, functionally these act very similar to indel types.
     /// All tandem repeat alleles must be at least 1 bp long by VCF definition.
     /// # Arguments
     /// * `vcf_index` - the index of the source VCF file
@@ -270,7 +276,7 @@ impl Variant {
     /// * `allele1` - the second allele (usually ALT[0])
     /// # Errors
     /// * if the provided sequences do not match a tandem repeat variant
-    pub fn new_tandem_repeat(vcf_index: usize, position: u64, allele0: Vec<u8>, allele1: Vec<u8>) -> Result<Variant, VariantError> {
+    pub fn new_tr_contraction(vcf_index: usize, position: u64, allele0: Vec<u8>, allele1: Vec<u8>) -> Result<Variant, VariantError> {
         // all alleles must be >= 1 for tandem repeats, most are longer though
         if allele0.is_empty() {
             return Err(VariantError::EmptyAllele { index: 0 });
@@ -279,9 +285,47 @@ impl Variant {
             return Err(VariantError::EmptyAllele { index: 1 });
         }
 
+        // allele0 must be > allele1
+        if allele1.len() >= allele0.len() {
+            return Err(VariantError::TrContractionLen);
+        }
+
         Ok(Variant {
             vcf_index,
-            variant_type: VariantType::TandemRepeat,
+            variant_type: VariantType::TrContraction,
+            position,
+            allele0,
+            allele1,
+            is_ignored: false
+        })
+    }
+
+    /// Creates a new tandem repeat expansion variant, functionally these act very similar to indel types.
+    /// All tandem repeat alleles must be at least 1 bp long by VCF definition.
+    /// # Arguments
+    /// * `vcf_index` - the index of the source VCF file
+    /// * `position` - the coordinate of the variant in a contig
+    /// * `allele0` - the first allele (usually REF)
+    /// * `allele1` - the second allele (usually ALT[0])
+    /// # Errors
+    /// * if the provided sequences do not match a tandem repeat variant
+    pub fn new_tr_expansion(vcf_index: usize, position: u64, allele0: Vec<u8>, allele1: Vec<u8>) -> Result<Variant, VariantError> {
+        // all alleles must be >= 1 for tandem repeats, most are longer though
+        if allele0.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 0 });
+        }
+        if allele1.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 1 });
+        }
+
+        // allele0 must be <= allele1
+        if allele1.len() < allele0.len() {
+            return Err(VariantError::TrExpansionLen);
+        }
+
+        Ok(Variant {
+            vcf_index,
+            variant_type: VariantType::TrExpansion,
             position,
             allele0,
             allele1,
@@ -459,18 +503,34 @@ mod tests {
     }
 
     #[test]
-    fn test_tandem_repeat() {
-        let variant = Variant::new_tandem_repeat(
+    fn test_tr_expansion() {
+        let variant = Variant::new_tr_expansion(
             0, 10,
             b"AAAC".to_vec(),
             b"AAACAAAC".to_vec()
         ).unwrap();
-        assert_eq!(variant.variant_type(), VariantType::TandemRepeat);
+        assert_eq!(variant.variant_type(), VariantType::TrExpansion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.ref_len(), 4);
 
         assert_eq!(variant.match_allele(b"AAAC"), 0);
         assert_eq!(variant.match_allele(b"AAACAAAC"), 1);
+        assert_eq!(variant.match_allele(b"AAACAA"), 2);
+    }
+
+    #[test]
+    fn test_tr_contraction() {
+        let variant = Variant::new_tr_contraction(
+            0, 10,
+            b"AAACAAAC".to_vec(),
+            b"AAAC".to_vec(),
+        ).unwrap();
+        assert_eq!(variant.variant_type(), VariantType::TrContraction);
+        assert_eq!(variant.position(), 10);
+        assert_eq!(variant.ref_len(), 8);
+
+        assert_eq!(variant.match_allele(b"AAACAAAC"), 0);
+        assert_eq!(variant.match_allele(b"AAAC"), 1);
         assert_eq!(variant.match_allele(b"AAACAA"), 2);
     }
 }

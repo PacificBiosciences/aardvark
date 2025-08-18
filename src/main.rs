@@ -115,8 +115,8 @@ fn run_compare(settings: CompareSettings) {
     let take_count = settings.take_blocks;
     let debug_run: bool = if skip_count != 0 || take_count != usize::MAX {
         warn!("Debug run detected, disabling file finalizing steps.");
-        warn!("Blocks to skip: {}", skip_count);
-        warn!("Blocks to process: {}", take_count);
+        warn!("Blocks to skip: {skip_count}");
+        warn!("Blocks to process: {take_count}");
         true
     } else {
         false
@@ -232,7 +232,6 @@ fn run_compare(settings: CompareSettings) {
     info!("Comparing regions...");
     let mut all_results: Vec<(CompareRegion, Option<CompareBenchmark>)> = all_regions.into_par_iter()
         //.progress_count(num_regions as u64)
-        .progress_with_style(style)
         .map(|region| {
             debug!("region = {region:?}");
             let comparison = match solve_compare_region(
@@ -247,6 +246,7 @@ fn run_compare(settings: CompareSettings) {
             debug!("Result = {comparison:?}");
             (region, comparison)
         })
+        .progress_with_style(style)
         .collect();
 
     // sort them by region ID
@@ -287,7 +287,7 @@ fn run_compare(settings: CompareSettings) {
 
     // now write things
     let summary_fn = settings.output_folder.join("summary.tsv");
-    info!("Saving output summary to {:?}...", summary_fn);
+    info!("Saving output summary to {summary_fn:?}...");
     if let Err(e) = summary_writer.write_summary(&summary_fn) {
         error!("Error while saving summary file: {e:#}");
         std::process::exit(exitcode::IOERR);
@@ -380,8 +380,8 @@ fn run_merge(settings: MergeSettings) {
     let take_count = settings.take_blocks;
     let debug_run: bool = if skip_count != 0 || take_count != usize::MAX {
         warn!("Debug run detected, disabling file finalizing steps.");
-        warn!("Blocks to skip: {}", skip_count);
-        warn!("Blocks to process: {}", take_count);
+        warn!("Blocks to skip: {skip_count}");
+        warn!("Blocks to process: {take_count}");
         true
     } else {
         false
@@ -431,7 +431,6 @@ fn run_merge(settings: MergeSettings) {
     info!("Merging regions...");
     let mut all_results: Vec<(MultiRegion, Option<MergeBenchmark>)> = all_regions.into_par_iter()
         //.progress_count(num_regions as u64)
-        .progress_with_style(style)
         .map(|region| {
             debug!("region = {region:?}");
             let comparison = match solve_merge_region(&region, &reference_genome, merge_config) {
@@ -444,6 +443,7 @@ fn run_merge(settings: MergeSettings) {
             debug!("Result = {comparison:?}");
             (region, comparison)
         })
+        .progress_with_style(style)
         .collect();
 
     // sort them by region ID
@@ -497,7 +497,7 @@ fn run_merge(settings: MergeSettings) {
 
     // now write things
     if let Some(summary_fn) = settings.output_summary_filename.as_deref() {
-        info!("Saving output summary to {:?}...", summary_fn);
+        info!("Saving output summary to {summary_fn:?}...");
         if let Err(e) = summary_writer.unwrap().write_summary(summary_fn, &settings.vcf_tags) {
             error!("Error while saving summary file: {e:#}");
             std::process::exit(exitcode::IOERR);

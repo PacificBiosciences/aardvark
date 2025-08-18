@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 /// * `vcf_fn` - the filename to index
 pub fn index_vcf(vcf_fn: &Path) -> anyhow::Result<()> {
     // first, build the index
-    let index = noodles::vcf::index(vcf_fn)?;
+    let index = noodles::vcf::fs::index(vcf_fn)?;
 
     // add the .tbi extension to the filename
     let mut tbi_fn = vcf_fn.to_owned().into_os_string();

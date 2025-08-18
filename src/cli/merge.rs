@@ -217,7 +217,7 @@ pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<Merge
 
     info!("Merge parameters:");
     if let Some(merge_strat) = settings.merge_strategy {
-        info!("\tPre-set merge strategy: {}", merge_strat);
+        info!("\tPre-set merge strategy: {merge_strat}");
         match merge_strat {
             MergeStrategy::Exact => {}, // default
             MergeStrategy::NoConflict => {

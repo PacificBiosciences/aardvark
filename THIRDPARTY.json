@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark",
-    "version": "0.7.4",
+    "version": "0.8.0",
     "authors": null,
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -928,7 +928,7 @@
   },
   {
     "name": "noodles",
-    "version": "0.96.0",
+    "version": "0.100.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -937,7 +937,7 @@
   },
   {
     "name": "noodles-bcf",
-    "version": "0.73.0",
+    "version": "0.77.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -946,7 +946,7 @@
   },
   {
     "name": "noodles-bed",
-    "version": "0.23.0",
+    "version": "0.27.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -955,7 +955,7 @@
   },
   {
     "name": "noodles-bgzf",
-    "version": "0.38.0",
+    "version": "0.42.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -964,7 +964,7 @@
   },
   {
     "name": "noodles-core",
-    "version": "0.17.0",
+    "version": "0.18.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -973,7 +973,7 @@
   },
   {
     "name": "noodles-csi",
-    "version": "0.46.0",
+    "version": "0.50.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -982,7 +982,7 @@
   },
   {
     "name": "noodles-tabix",
-    "version": "0.52.0",
+    "version": "0.56.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -991,7 +991,7 @@
   },
   {
     "name": "noodles-util",
-    "version": "0.65.0",
+    "version": "0.69.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",
@@ -1000,7 +1000,7 @@
   },
   {
     "name": "noodles-vcf",
-    "version": "0.76.0",
+    "version": "0.80.0",
     "authors": "Michael Macias <zaeleus@gmail.com>",
     "repository": "https://github.com/zaeleus/noodles",
     "license": "MIT",

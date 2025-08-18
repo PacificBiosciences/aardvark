@@ -28,15 +28,15 @@ pub struct VariantMerger {
     /// Header that goes into the merged VCF, copied from the primary input
     merged_header: vcf::Header,
     /// Writer for the primary merged VCF
-    merged_writer: vcf::io::Writer<bgzf::MultithreadedWriter<File>>,
+    merged_writer: vcf::io::Writer<bgzf::io::MultithreadedWriter<File>>,
     /// Pre-computed labels of classification to a joined string
     prelabels: HashMap<MergeClassification, record_buf::info::field::Value>,
     /// Set of all labels by index
     input_labels: Vec<String>,
     /// Writes out the relevant bed regions
-    region_writer: noodles::bed::Writer<4, std::io::BufWriter<bgzf::MultithreadedWriter<std::fs::File>>>,
+    region_writer: noodles::bed::io::Writer<4, std::io::BufWriter<bgzf::io::MultithreadedWriter<std::fs::File>>>,
     /// Writes out the relevant bed regions
-    failed_region_writer: noodles::bed::Writer<4, std::io::BufWriter<bgzf::MultithreadedWriter<std::fs::File>>>
+    failed_region_writer: noodles::bed::io::Writer<4, std::io::BufWriter<bgzf::io::MultithreadedWriter<std::fs::File>>>
 }
 
 // TODO: technically, this is writing 3 big files (well, 2 big, 1 small).
@@ -62,7 +62,7 @@ impl VariantMerger {
         ensure!(input_vcfs.len() == input_labels.len(), "Expected 1-to-1 relationship between input_vcfs and input_labels");
 
         // generate the main file first
-        info!("Creating output VCF folder at {:?}...", out_vcf_folder);
+        info!("Creating output VCF folder at {out_vcf_folder:?}...");
         match std::fs::create_dir_all(out_vcf_folder) {
             Ok(()) => {},
             Err(e) => {
@@ -82,7 +82,7 @@ impl VariantMerger {
             .with_context(|| format!("Error while reading header of {primary_vcf_fn:?}:"))?;
 
         let ver: &str = crate::cli::core::FULL_VERSION.as_str(); // clippy gets weird about direct access
-        let cli_version = format!("\"{}\"", ver);
+        let cli_version = format!("\"{ver}\"");
         let cli_string = format!("\"{}\"", std::env::args().collect::<Vec<String>>().join(" "));
         vcf_header.insert("aardvark_version".parse()?, vcf::header::record::Value::from(cli_version))?;
         vcf_header.insert("aardvark_command".parse()?, vcf::header::record::Value::from(cli_string))?;
@@ -123,7 +123,7 @@ impl VariantMerger {
         debug!("Opening {out_vcf_fn:?} for writing...");
         let file = File::create(&out_vcf_fn)?;
         let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
-        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
+        let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, file);
         let mut vcf_writer = vcf::io::Writer::new(bgzf_writer);
         vcf_writer.write_header(&vcf_header)?;
 
@@ -140,14 +140,14 @@ impl VariantMerger {
         // lastly, we need a region writer
         let bed_fn = out_vcf_folder.join("regions.bed.gz");
         let file = File::create(&bed_fn)?;
-        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
+        let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, file);
         #[allow(clippy::default_constructed_unit_structs)]
         let region_writer = noodles::bed::io::writer::Builder::<4>::default()
             .build_from_writer(bgzf_writer);
 
         let failed_bed_fn = out_vcf_folder.join("failed_regions.bed.gz");
         let file = File::create(&failed_bed_fn)?;
-        let bgzf_writer = bgzf::MultithreadedWriter::with_worker_count(w_threads, file);
+        let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, file);
         #[allow(clippy::default_constructed_unit_structs)]
         let failed_region_writer = noodles::bed::io::writer::Builder::<4>::default()
             .build_from_writer(bgzf_writer);
