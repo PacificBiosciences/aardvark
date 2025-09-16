@@ -1,0 +1,89 @@
+# This specific workflow reads the version from the Cargo.toml file, so it is fairly rust specific right now.
+# It checks for a tag matching v* and if it does not exist, it creates the tag and calls the create-release workflow.
+# Steps:
+# - Get the version from the Cargo.toml file
+# - Check if the tag already exists
+# - If not:
+#   - Create the tag
+#   - Call the create-release workflow
+# Errors:
+# - If no version is found in the Cargo.toml file, the workflow will fail
+# - If the create-release workflow fails, the workflow will fail
+# Maintenance:
+# - Update the Rust version in the create-release workflow to match the Rust version you compile with
+
+name: Check for new version
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-new-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get version from Cargo.toml
+      id: get_version
+      run: |
+        # Try to get version from Cargo.toml first
+        if [ -f "Cargo.toml" ]; then
+          VERSION=$(grep '^version =' Cargo.toml | cut -d'"' -f2)
+        else
+          echo "No Cargo.toml found to determine version"
+          exit 1
+        fi
+
+        # make sure we have a version
+        if [ -z "$VERSION" ]; then
+          echo "No version found in Cargo.toml"
+          exit 1
+        fi
+        
+        # We have a version, the tag has a 'v' prefix
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+        echo "Detected version: $VERSION"
+    
+    - name: Check if the release already exists
+      uses: insightsengineering/release-existence-action@v1
+      id: check_release
+      with:
+        release-tag: '${{ steps.get_version.outputs.tag }}'
+
+    outputs:
+      release_exists: ${{ steps.check_release.outputs.release-exists }}
+      version: ${{ steps.get_version.outputs.version }}
+      tag: ${{ steps.get_version.outputs.tag }}
+
+  run-tests:
+    name: run_static_tests
+    uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.4.0
+    # uses: ./.github/workflows/rust-static-test.yml
+    needs: check-new-tag
+    if: needs.check-new-tag.outputs.release_exists == 'false'
+    with:
+      rust_version: 1.88.0 # if you change these, you need to update the create-release version also (below)
+      test_docs: true
+
+  # Build the binary and tarball wrapping the binary
+  call-create-release:
+    name: Call create-release workflow
+    needs: [check-new-tag, run-tests] # only run if the tests passed
+    if: needs.check-new-tag.outputs.release_exists == 'false'
+    uses: holtjma/shared_github_workflows/.github/workflows/create-release.yml@v0.4.0
+    #uses: ./.github/workflows/create-release.yml
+    permissions:
+      contents: write
+    with:
+      release_name: 'Aardvark'
+      binary_name: aardvark
+      tag: ${{ needs.check-new-tag.outputs.tag }}
+      rust_version: 1.88.0 # ideally, this would be an env variable, but actions does not seem to support that

@@ -1,14 +1,10 @@
-name: Continuous integration
+name: Static CI
+
 on: [push, pull_request]
 
 jobs:
-  test:
-    name: cargo test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: RUST_LOG=trace cargo test --all-features --release
-      - run: cargo clippy -- -D warnings
+  call-external:
+    uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.4.0
+    with:
+      rust_version: 1.88.0
+      test_docs: true
