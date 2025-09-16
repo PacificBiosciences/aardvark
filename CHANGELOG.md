@@ -1,3 +1,7 @@
+# v0.8.1
+## Changes
+- Adds automated workflow for static binary build and release. Aardvark functionality identical to v0.8.0.
+
 # v0.8.0
 ## Changes
 - Adds beta support for medium-sized variant types (<= 10 kbp):
