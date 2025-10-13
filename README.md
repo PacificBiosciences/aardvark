@@ -31,7 +31,9 @@ Authors: [Matt Holt](https://github.com/holtjma), [Zev Kronenberg](https://githu
 * [Performance](./docs/performance.md)
 
 ## Citation
-Aardvark does not currently have a publication associated with it.
+If you use Aardvark, please cite our bioRxiv pre-print:
+
+[Holt, James Matthew, et al. "Aardvark: Sifting through differences in a mound of variants." bioRxiv (2025): 2025-10.](https://doi.org/10.1101/2025.10.03.680257)
 
 ## Support information
 If you notice any missing features, bugs, or need assistance with analyzing the output of Aardvark, 
