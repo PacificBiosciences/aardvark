@@ -19,7 +19,7 @@ Both `compare` and `merge` commands follow a three step process:
 
 ## Sub-region identification
 Aardvark starts by identifying sub-regions of the full input that can be solved independently.
-First, all valid BED regions are loaded from the user-provided input (`--confidence-region` or `--regions`).
+First, all valid BED regions are loaded from the user-provided input (`--regions`).
 Aardvark then loads all variants that are **fully-contained** within each region from all provided VCF files.
 Lastly, Aardvark splits the BED regions further by looking for gaps between consecutive variants across all files.
 Any gaps that larger than a defined window (50 bp) are split into sub-regions.

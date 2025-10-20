@@ -19,7 +19,7 @@ aardvark compare \
     --reference <FASTA> \
     --truth-vcf <VCF> \
     --query-vcf <VCF> \
-    --confidence-regions <BED> \
+    --regions <BED> \
     --output-dir <DIR>
 ```
 
@@ -27,7 +27,7 @@ Required parameters:
 * `--reference <FASTA>` - Input reference genome FASTA file, gzip allowed
 * `--truth-vcf <VCF>` - Input truth variant call set, which must be tabix-indexed
 * `--query-vcf <VCF>` - Input query variant call set, which must be tabix-indexed
-* `--confidence-regions <BED>` - Input regions to perform comparison in. Any variants from either truth or query that are not **fully-contained** within these regions will be excluded from the entire analysis.
+* `--regions <BED>` - Input regions to perform comparison in. Any variants from either truth or query that are not **fully-contained** within these regions will be excluded from the entire analysis.
 * `--output-dir <DIR>` - Primary output folder containing the [summary statistics file](#summary-statistics-file) and [labeled VCF files](#labeled-vcf-files)
 
 ## Additional options
