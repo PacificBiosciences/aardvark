@@ -73,27 +73,44 @@ An interesting characteristic of the `BASEPAIR` type is that some bases can be s
 To avoid floating-point calculations, all values reported by aardvark are doubled.
 For example, if Aardvark reports TP=5, FP=2, and FN=1; then 2.5 bases were detected as true positive, 1 base was detected as a false positive, and 0.5 bases were detected as false negatives.
 
-## Haplotype
-The haplotype (`HAP`) type measures the total number of ALT variant alleles that are accurately detected.
+## Genotype
+Conceptually, the genotype (`GT`) score is modeled after the [hap.py](https://github.com/Illumina/hap.py) scoring scheme.
+In this approach, each genotype present in the provided variant files is assigned a label (TP, FP, or FN).
+Additionally, each genotype has equal weight for the summary metrics, regardless of the zygosity or the length of the alleles.
+This can create biases in the scoring depending on the underlying variant representation.
+There are some small technical differences in the Aardvark implementation compared to hap.py's:
+
+* Zygosity errors are treated differently - If there is a zygosity mismatch between the truth and query (e.g., 0/1 v. 1/1), then the heterozygous entry is labeled as true and the homozygous entry as false. For example, if a truth genotype is heterozygous (0/1) and the query genotype is homozygous (1/1), then it will receive both truth.TP and query.FP labels, indicating the the one ALT allele in truth was detected but that the extra ALT allele in query was not matched in truth.
+* Multi-allelic genotypes are split - A genotype like 1|2 will be split into two heterozygous entries: 1|0 and 0|1. Functionally, this is assigning each alternate allele a genotype.
+
+The genotype mode does generate a single classification (TP, FP, or FN) for each variant in the input VCF files.
+As such, Aardvark uses these `GT` classification to determine which VCF to save each variant in the [debug VCF outputs](./compare.md#debug-vcf-details).
+
+## Optional comparison types
+### Haplotype
+The haplotype (`HAP`) type measures the total number of ALT variant alleles that are accurately detected, which primarily changes the scoring of homozygous genotype calls.
 For this type, every ALT allele in the truth is labeled as either TP or FN, and every ALT allele in the query is labeled as either TP or FP.
 This labeling occurs on each of the optimized haplotype sequences (i.e., twice), generating a higher implicit weight for homozygous variants relative to heterozygous variants.
-Additionally, greater weight is given to variant types with more representation, which may skew the results when indels are split into multiple entries.
-Critically, recall is measured solely by the labels of the truth variants and precision solely by the labels of query variants.
-This means that truth.TP and query.TP may not match if variants are represented differently or have different zygosities.
+The haplotype scoring scheme uses the same fundamental approach as genotype scoring, so it can also be biased depending on the underlying variant representation.
 
-## Weighted Haplotype
+### Weighted Haplotype
 The weighted haplotype (`WEIGHTED_HAP`) metric is the same as the haplotype (`HAP`) metric except each allele is weighted by the edit distance between the REF and ALT sequences, which effectively provides higher weight to allele changes that impact more basepairs.
 For SNVs, this weight is always 1, so the `HAP` and `WEIGHTED_HAP` scores are identical.
 For indel variant types, the weight is typically the length change relative to the reference allele.
 Thus, a 20 basepair insertion will have 20x the weight of a 1 basepair insertion.
 Conceptually, this is quite similar to the `BASEPAIR` metric, but without allowing for partial-credit matches.
+The weighted haplotype scoring scheme uses the same fundamental approach as genotype scoring, so it can also be biased depending on the underlying variant representation.
 
-## Genotype
-The genotype (`GT`) type checks if the total zygosity of ALT variant alleles are accurately detected.
-This type is conceptually the same as `HAP`, except homozygous variants are collapsed into a single TP, FN, or FP label.
-Similar to `HAP`, this method gives greater weight to variant types with more representation, which may skew the results when indels are split into multiple entries.
-We note that labels in truth may not match those in query if the representations or zygosities are different.
-For example, if a truth genotype is heterozygous (0/1) and the query genotype is homozygous (1/1), then it will receive both truth.TP and query.FP labels, indicating the the one ALT allele in truth was detected but that the extra ALT allele in query was not matched in truth.
+### Record basepair
+The record basepair (`RECORD_BP`) type measures the total number of accurate bases in the non-reference VCF query records relative to truth.
+The main difference between this mode and standard `BASEPAIR` is that the number of true positives is based on the full allele lengths, and not on the number of differences between the REF and ALT alleles within the records.
+For example, a VCF record with `REF=ACC` and `ALT=ACCCC` would only have a weight of 2 with basepair scoring since there are two modified (inserted) bases in this variant.
+With `RECORD_BP`, the weight is instead the maximum of the REF/ALT sequence, in this case 5 from `ACCCC`.
+`BASEPAIR` and `RECORD_BP` should always have identical FP and FN values across all outputs, and `RECORD_BP`'s TP values should be strictly greater than or equal to `BASEPAIR`'s.
+This means that the summary metrics for `RECORD_BP` should be strictly greater than those of `BASEPAIR` scoring.
 
-Despite these complexities, this mode does generate a single classification (TP, FP, or FN) for each variant in the input VCF files.
-As such, Aardvark uses these `GT` classification to determine which VCF to save each variant in our [debug VCF outputs](./compare.md#debug-vcf-details).
+For variant callers that are reference-aware, this can lead to inflated scores as they likely have a prior that would bias them towards the reference allele.
+However, this metric may be appropriate for callers that are reference-agnostic and are not biased towards the reference allele.
+For example, the [TRGT tandem repeat caller](https://github.com/PacificBiosciences/trgt) generates long alleles for defined catalog regions, but without any priors that would bias it towards the reference allele.
+In this particular case, it may be more suitable to use the full record region (i.e. `RECORD_BP`) instead of just the differences (i.e. `BASEPAIR`), as TRGT is independently assembling the full allelic sequence and then converting that into a variant record.
+While `RECORD_BP` can be an acceptable metric for unbiased callers, we recommend all users review it in conjunction with the less biased `BASEPAIR` metric.

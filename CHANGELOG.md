@@ -1,3 +1,10 @@
+# v0.9.0
+## Changes
+- Adds the optional `RECORD_BP` comparison type to all summary files. Review our [methods](./docs/methods.md#record-basepair) for details on this metric. This metric is enabled with `--enable-record-basepair-metrics`.
+- The `GT` and `BASEPAIR` metrics are recommend for most users. Thus, the `HAP` and `WEIGHTED_HAP` metrics are now disabled by default. Two new options have been added to enable these secondary metrics: `--enable-hapotype-metrics` and `--enabled-weighted-haplotype-metrics`.
+- Refactored the way group metrics are internally represented for easier long-term maintenance
+- Added new GitHub automations for developer ease-of-use
+
 # v0.8.1
 ## Changes
 - Adds automated workflow for static binary build and release. Aardvark functionality identical to v0.8.0.

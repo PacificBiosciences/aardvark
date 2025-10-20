@@ -10,6 +10,7 @@ use aardvark::cli::core::{Commands, get_cli};
 use aardvark::cli::merge::{MergeSettings, check_merge_settings};
 use aardvark::data_types::compare_benchmark::CompareBenchmark;
 use aardvark::data_types::compare_region::CompareRegion;
+use aardvark::data_types::grouped_metrics::MetricsType;
 use aardvark::data_types::merge_benchmark::MergeBenchmark;
 use aardvark::data_types::multi_region::MultiRegion;
 use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
@@ -126,9 +127,25 @@ fn run_compare(settings: CompareSettings) {
         warn!("Skip is enabled, output make be truncated.");
     }
 
+    // build the metrics to write
+    let mut metrics_to_write = vec![
+        MetricsType::Genotype,
+        MetricsType::Basepair,
+    ];
+    if settings.enable_haplotype_scoring {
+        metrics_to_write.push(MetricsType::Haplotype);
+    }
+    if settings.enable_weighted_haplotype_scoring {
+        metrics_to_write.push(MetricsType::WeightedHaplotype);
+    }
+    if settings.enable_record_basepair_scoring {
+        metrics_to_write.push(MetricsType::RecordBasepair);
+    }
+
     // prep any writer accumulators
+    // build the summary writer
     let mut summary_writer = SummaryWriter::new(
-        settings.compare_label.clone(), stratifications.as_ref()
+        settings.compare_label.clone(), metrics_to_write.clone(), stratifications.as_ref()
     );
 
     let w_threads = settings.threads / 4;
@@ -147,7 +164,7 @@ fn run_compare(settings: CompareSettings) {
     let region_writer = settings.debug_folder.as_ref().map(|debug_path| {
         info!("Opening debug region writer file...");
         let out_fn = debug_path.join("region_summary.tsv.gz");
-        match RegionSummaryWriter::new(&out_fn, w_threads) {
+        match RegionSummaryWriter::new(&out_fn, metrics_to_write, w_threads) {
             Ok(rsw) => rsw,
             Err(e) => {
                 error!("Error while building region summary writer: {e:#}");
@@ -260,10 +277,12 @@ fn run_compare(settings: CompareSettings) {
         std::process::exit(exitcode::IOERR);
     };
 
-    let joint_gt = summary_writer.all_metrics().gt();
-    let joint_hap = summary_writer.all_metrics().hap();
-    let joint_weighted_hap = summary_writer.all_metrics().weighted_hap();
-    let joint_basepair = summary_writer.all_metrics().basepair();
+    let joint_metrics = summary_writer.all_metrics().joint_metrics();
+    let joint_gt = joint_metrics.gt();
+    let joint_hap = joint_metrics.hap();
+    let joint_weighted_hap = joint_metrics.weighted_hap();
+    let joint_basepair = joint_metrics.basepair();
+    let joint_record_bp = joint_metrics.record_bp();
     let solved_blocks = summary_writer.solved_blocks();
     let error_blocks = summary_writer.error_blocks();
 
@@ -271,18 +290,28 @@ fn run_compare(settings: CompareSettings) {
     info!("\tRecall: {:?}", joint_gt.summary_metrics.recall());
     info!("\tPrecision: {:?}", joint_gt.summary_metrics.precision());
     info!("\tF1: {:?}", joint_gt.summary_metrics.f1());
-    info!("Joint Hap: {joint_hap:?}");
-    info!("\tRecall: {:?}", joint_hap.recall());
-    info!("\tPrecision: {:?}", joint_hap.precision());
-    info!("\tF1: {:?}", joint_hap.f1());
-    info!("Joint Weighted Hap: {joint_weighted_hap:?}");
-    info!("\tRecall: {:?}", joint_weighted_hap.recall());
-    info!("\tPrecision: {:?}", joint_weighted_hap.precision());
-    info!("\tF1: {:?}", joint_weighted_hap.f1());
     info!("Joint Basepair: {joint_basepair:?}");
     info!("\tRecall: {:?}", joint_basepair.recall());
     info!("\tPrecision: {:?}", joint_basepair.precision());
     info!("\tF1: {:?}", joint_basepair.f1());
+    if settings.enable_haplotype_scoring {
+        info!("Joint Hap: {joint_hap:?}");
+        info!("\tRecall: {:?}", joint_hap.recall());
+        info!("\tPrecision: {:?}", joint_hap.precision());
+        info!("\tF1: {:?}", joint_hap.f1());
+    }
+    if settings.enable_weighted_haplotype_scoring {
+        info!("Joint Weighted Hap: {joint_weighted_hap:?}");
+        info!("\tRecall: {:?}", joint_weighted_hap.recall());
+        info!("\tPrecision: {:?}", joint_weighted_hap.precision());
+        info!("\tF1: {:?}", joint_weighted_hap.f1());
+    }
+    if settings.enable_record_basepair_scoring {
+        info!("Joint Record BP: {joint_record_bp:?}");
+        info!("\tRecall: {:?}", joint_record_bp.recall());
+        info!("\tPrecision: {:?}", joint_record_bp.precision());
+        info!("\tF1: {:?}", joint_record_bp.f1());
+    }
     info!("Solved:error blocks: {solved_blocks} : {error_blocks}");
 
     // now write things
