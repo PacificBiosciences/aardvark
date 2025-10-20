@@ -1,5 +1,5 @@
 
-use crate::data_types::grouped_metrics::GroupMetrics;
+use crate::data_types::grouped_metrics::GroupTypeMetrics;
 use crate::data_types::summary_metrics::SummaryMetrics;
 use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
 use crate::data_types::variants::{Variant, VariantType};
@@ -15,7 +15,7 @@ pub struct CompareBenchmark {
     bm_edit_distance_h2: usize,
 
     /// Grouped metrics, which are the bulk of tracked statistics
-    group_metrics: GroupMetrics,
+    group_metrics: GroupTypeMetrics,
 
     // variant level statistics
     /// Variant metrics for truth variants
@@ -95,6 +95,14 @@ impl CompareBenchmark {
         self.group_metrics.add_basepair_metrics(basepair_metrics, variant_type);
     }
 
+    /// Adds record-basepair metrics to the current tracking
+    /// # Arguments
+    /// * `record_bp_metrics` - the metrics to get added into the current values
+    /// * `variant_type` - optional variant type these stats are added to; if none, it goes into the "All" grouping
+    pub fn add_record_bp_metrics(&mut self, record_bp_metrics: SummaryMetrics, variant_type: Option<VariantType>) {
+        self.group_metrics.add_record_bp_metrics(record_bp_metrics, variant_type);
+    }
+
     /// Sets the values for a reverse benchmark. This is primarily to set query_tp and query_fp values from a reverse comparison.
     /// # Arguments
     /// * `other` - Results from a benchmark where truth and query have been swapped.
@@ -136,7 +144,7 @@ impl CompareBenchmark {
         self.region_id
     }
 
-    pub fn group_metrics(&self) -> &GroupMetrics {
+    pub fn group_metrics(&self) -> &GroupTypeMetrics {
         &self.group_metrics
     }
 

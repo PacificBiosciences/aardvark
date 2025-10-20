@@ -14,6 +14,9 @@ Table of contents:
 * [Frequently asked questions](#frequently-asked-questions)
 
 # Quickstart
+The following command uses recommended default settings for comparing small variants only.
+See our [recommended settings](./recommended_settings.md) for recommendations comparisons with other variant types.
+
 ```bash
 aardvark compare \
     --reference <FASTA> \
@@ -42,7 +45,7 @@ The summary statistics file (`summary.tsv`) is a TSV output containing high-leve
 
 ### Fields
 * `compare_label` - A user-provided comparison label that is just passed through to this output. Specified via `--compare-label` option.
-* `comparison` - The comparison type, which will be one of `GT` (genotype), `HAP` (haplotype), `WEIGHTED_HAP` (weighted haplotye), or `BASEPAIR` (sequence/basepair level). See [methods](./methods.md#comparison-types) for more details on each comparison type.
+* `comparison` - The comparison type, which will be one of `GT` (genotype), `BASEPAIR` (sequence/basepair level), or one of the optional metrics. See [methods](./methods.md#comparison-types) for more details on each comparison type.
 * `filter` - Indicates if any filter was applied.
 * `region_label` - The region label from stratification inputs. By default, only `ALL` is provided which contains all variants analyzed. If [stratifications](#stratifications) are provided, then additional rows for each stratification label will be added and this column will contain the label.
 * `variant_type` - The type of variant that the assessment corresponds to.
@@ -152,17 +155,15 @@ This file captures summary metrics for each discrete region, similar to the over
 Fields:
 * `region_id` - A unique region identifier corresponding to the `RI` field of the [debug VCFs](#debug-vcf-details)
 * `coordinates` - The coordinates of the corresponding region
-* `comparison` - The comparison type for the metrics on the row, which will be one of `GT`, `HAP`, or `BASEPAIR`. This is a summary for `ALL` variant types.
+* `comparison` - The comparison type for the metrics on the row, which will be one of `GT`, `BASEPAIR`, or one of the optional metrics. This is a summary for `ALL` variant types.
 * `truth_total`, `truth_tp`, `truth_fn`, `query_tp`, `query_fp`, `metric_recall`, `metric_precision`, `metric_f1`, `truth_fn_gt`, `query_fp_gt` - See definitions for the [summary statistics file](#summary-statistics-file)
 
 Partial example:
 ```
 region_id	coordinates	comparison	truth_total	truth_tp	truth_fn	query_total	query_tp	query_fp	metric_recall	metric_precision	metric_f1	truth_fn_gt	query_fp_gt
 0	chr1:782956-783056	GT	1	1	0	1	1	0	1.0	1.0	1.0	0	0
-0	chr1:782956-783056	HAP	2	2	0	2	2	0	1.0	1.0	1.0		
 0	chr1:782956-783056	BASEPAIR	4	4	0	4	4	0	1.0	1.0	1.0		
 1	chr1:783125-783225	GT	1	1	0	1	1	0	1.0	1.0	1.0	0	0
-1	chr1:783125-783225	HAP	2	2	0	2	2	0	1.0	1.0	1.0		
 1	chr1:783125-783225	BASEPAIR	4	4	0	4	4	0	1.0	1.0	1.0	
 ...
 ```

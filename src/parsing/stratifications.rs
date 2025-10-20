@@ -65,13 +65,13 @@ impl Stratifications {
         // now lets actually load these files
         let style = get_progress_style();
         let datasets: Vec<(String, StratData)> = filenames.into_par_iter()
-            .progress_with_style(style)
             .map(|(label, filepath)| {
                 // load the BED file data
                 let strat_data = StratData::from_bed(&filepath)
                     .with_context(|| format!("Error while loading {filepath:?}:"))?;
                 Ok((label, strat_data))
             })
+            .progress_with_style(style)
             .collect::<anyhow::Result<_>>()?;
 
         // reformat to an IndexMap

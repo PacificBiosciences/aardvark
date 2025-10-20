@@ -3,6 +3,7 @@ use anyhow::{bail, ensure, Context};
 use derive_builder::Builder;
 use log::debug;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
+use std::collections::BTreeMap;
 
 use crate::data_types::compare_benchmark::{CompareBenchmark, SequenceBundle};
 use crate::data_types::compare_region::CompareRegion;
@@ -204,6 +205,9 @@ pub fn solve_compare_region(
     // now add all the basepair-level stats
     add_basepair_stats(problem, reference_genome, &mut truth_stats, &optimized_haplotypes)?;
 
+    // lastly add in our record-basepair level stats
+    add_record_basepair_stats(problem, &mut truth_stats)?;
+
     // add in the containment regions if we have them
     if let Some(cr) = containment_regions {
         truth_stats.add_containment_regions(cr);
@@ -373,6 +377,79 @@ fn add_basepair_stats(
             debug!("\t{filter_type:?} => {vt_align_metrics:?}");
             bench_result.add_basepair_metrics(vt_align_metrics, Some(filter_type));
         }
+    }
+
+    Ok(())
+}
+
+/// Adds the record-basepair level statistics to our final result
+/// # Arguments
+/// * `problem` - the problem we're looking at
+/// * `bench_result` - a mutable result that we are adding record-basepair statistics to
+fn add_record_basepair_stats(
+    problem: &CompareRegion, bench_result: &mut CompareBenchmark
+) -> anyhow::Result<()> {
+    // count the total number of each basepair type in the problem
+    let mut truth_total = 0;
+    let mut truth_total_by_vt: BTreeMap<VariantType, u64> = Default::default();
+    for (variant, zygosity) in problem.truth_variants().iter().zip(problem.truth_zygosity().iter()) {
+        // the total count is the zygosity count times the raw allele space
+        let zyg_count = zygosity.to_allele_count() as u64;
+        let count_value = zyg_count * variant.raw_allele_space() as u64;
+
+        let vt = variant.variant_type();
+        *truth_total_by_vt.entry(vt).or_insert(0) += count_value;
+        truth_total += count_value;
+    }
+
+    // do the same for the query
+    let mut query_total = 0;
+    let mut query_total_by_vt: BTreeMap<VariantType, u64> = Default::default();
+    for (variant, zygosity) in problem.query_variants().iter().zip(problem.query_zygosity().iter()) {
+        // the total count is the zygosity count times the raw allele space
+        let zyg_count = zygosity.to_allele_count() as u64;
+        let count_value = zyg_count * variant.raw_allele_space() as u64;
+
+        let vt = variant.variant_type();
+        *query_total_by_vt.entry(vt).or_insert(0) += count_value;
+        query_total += count_value;
+    }
+
+    // get the basepair metrics, we only need the FN and FP counts
+    let basepair_metrics = bench_result.group_metrics().joint_metrics().basepair();
+    let truth_fn = basepair_metrics.truth_fn;
+    let query_fp = basepair_metrics.query_fp;
+
+    // now we can compute the alt-basepair metrics, the totals need to be doubled, FN and FP are already doubled
+    let truth_tp = 2*truth_total - truth_fn;
+    let query_tp = 2*query_total - query_fp;
+    ensure!(truth_tp >= basepair_metrics.truth_tp, "Truth TP is less than basepair TP");
+    ensure!(query_tp >= basepair_metrics.query_tp, "Query TP is less than basepair TP");
+
+    // add the metrics
+    let alt_basepair_metrics = SummaryMetrics::new(truth_tp, truth_fn, query_tp, query_fp);
+    bench_result.add_record_bp_metrics(alt_basepair_metrics, None);
+
+    // now add the same but for each variant type
+    // TODO: is there some way to avoid cloning here?
+    let variant_metrics = bench_result.group_metrics().variant_metrics().clone();
+    for (vt, vt_metrics) in variant_metrics.iter() {
+        // get the truth and query totals for this variant type
+        let truth_total = truth_total_by_vt.get(vt).copied().unwrap_or_default();
+        let query_total = query_total_by_vt.get(vt).copied().unwrap_or_default();
+
+        // get the truth and query FNs
+        let vt_basepair_metrics = vt_metrics.basepair();
+        let truth_fn = vt_basepair_metrics.truth_fn;
+        let query_fp = vt_basepair_metrics.query_fp;
+
+        // compute the truth and query TPs
+        let truth_tp = 2*truth_total - truth_fn;
+        let query_tp = 2*query_total - query_fp;
+
+        // compute the alt-basepair metrics
+        let alt_basepair_metrics = SummaryMetrics::new(truth_tp, truth_fn, query_tp, query_fp);
+        bench_result.add_record_bp_metrics(alt_basepair_metrics, Some(*vt));
     }
 
     Ok(())
@@ -771,9 +848,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 0, 1, 0));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(1, 0, 1, 0));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
 
@@ -816,9 +893,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0)); // two variants here
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 0, 1, 0));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0)); // two variants here
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(2, 0, 1, 0));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(),
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()
@@ -863,9 +940,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0)); // only one variant in truth set
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 0, 2, 0));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(1, 0, 2, 0));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 2bp difference is shared
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[
             VariantMetrics::new(VariantSource::Query, 1, 1).unwrap(),
@@ -908,9 +985,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 0); // should be exact paths
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0)); // only one variant in truth set
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 0, 2, 0)); // but two haplotype variants
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0)); // only one variant in truth set
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(2, 0, 2, 0)); // but two haplotype variants
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 0, 2*2, 0)); // 1bp difference on both haps
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 2, 2).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 2, 2).unwrap()]);
 
@@ -944,9 +1021,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 1); // 1 BP ed
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(0, 1, 0, 0));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(0, 1, 0, 0));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap()]);
         assert_eq!(result.query_variant_data(), &[]);
 
@@ -990,9 +1067,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 2); // two BP delta
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 1, 2, 1));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(2, 1, 2, 1));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(), // FP in truth space
             VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap(), // FN in truth space
@@ -1038,9 +1115,9 @@ mod tests {
         let result = solve_compare_region(&problem, &reference_genome, Default::default(), None).unwrap();
         assert_eq!(result.total_ed(), 1); // path through graph is an exact match still
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(0, 1, 1, 1, 1, 0));
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(1, 1, 1, 1));
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(3, 1, 3, 1)); // one allele is on track, the other is half-right, half-wrong
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(0, 1, 1, 1, 1, 0));
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(1, 1, 1, 1));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(3, 1, 3, 1)); // one allele is on track, the other is half-right, half-wrong
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap() // expected homozygous, but found something else
         ]);
@@ -1080,11 +1157,11 @@ mod tests {
         // our results should have two of the SNVs skipped, one in truth and one in query; this is because they can't get incorporated
         assert_eq!(result.total_ed(), 0); // add ED comes from the variant skips
         let group_metrics = result.group_metrics();
-        assert_eq!(*group_metrics.gt(), SummaryGtMetrics::new(1, 1, 1, 1, 1, 1)); // one right, one wrong in each
-        assert_eq!(*group_metrics.hap(), SummaryMetrics::new(2, 1, 2, 1)); // two correct alleles, one skipped
-        assert_eq!(*group_metrics.basepair(), SummaryMetrics::new(4, 2, 4, 2)); // same, but doubled for basepair
-        assert_eq!(group_metrics.variant_basepair().get(&VariantType::Snv).unwrap(), &SummaryMetrics::new(3, 1, 3, 1)); // check that one SNV is missed, but half right in this situation
-        assert_eq!(group_metrics.variant_basepair().get(&VariantType::Deletion).unwrap(), &SummaryMetrics::new(2, 0, 2, 0)); // check that one SNV is missed, but half right in this situation
+        assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(1, 1, 1, 1, 1, 1)); // one right, one wrong in each
+        assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(2, 1, 2, 1)); // two correct alleles, one skipped
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(4, 2, 4, 2)); // same, but doubled for basepair
+        assert_eq!(group_metrics.variant_metrics().get(&VariantType::Snv).unwrap().basepair(), &SummaryMetrics::new(3, 1, 3, 1)); // check that one SNV is missed, but half right in this situation
+        assert_eq!(group_metrics.variant_metrics().get(&VariantType::Deletion).unwrap().basepair(), &SummaryMetrics::new(2, 0, 2, 0)); // check that one SNV is missed, but half right in this situation
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(),
             VariantMetrics::new(VariantSource::Truth, 2, 1).unwrap()

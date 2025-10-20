@@ -116,6 +116,24 @@ pub struct CompareSettings {
     #[clap(hide = true)] // if you remove this, make sure you re-enable the CLI outputs
     pub enable_exact_shortcut: bool,
 
+    /// Enables the haplotype scoring metrics
+    #[clap(long = "enable-haplotype-metrics")]
+    #[clap(help_heading = Some("Optional metrics"))]
+    #[clap(default_value = "false")]
+    pub enable_haplotype_scoring: bool,
+
+    /// Enables the weighted haplotype scoring metrics
+    #[clap(long = "enable-weighted-haplotype-metrics")]
+    #[clap(help_heading = Some("Optional metrics"))]
+    #[clap(default_value = "false")]
+    pub enable_weighted_haplotype_scoring: bool,
+
+    /// Enables the record-basepair scoring metrics
+    #[clap(long = "enable-record-basepair-metrics")]
+    #[clap(help_heading = Some("Optional metrics"))]
+    #[clap(default_value = "false")]
+    pub enable_record_basepair_scoring: bool,
+
     /// Number of threads to use in the benchmarking step
     #[clap(long = "threads")]
     #[clap(value_name = "THREADS")]
@@ -177,6 +195,14 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         info!("\tStratifications: {filename:?}");
     } else {
         info!("\tStratifications: None");
+    }
+
+    // check for the haplotype scoring metrics
+    if settings.enable_haplotype_scoring || settings.enable_weighted_haplotype_scoring || settings.enable_record_basepair_scoring {
+        info!("Optional metrics:");
+        info!("\tHaplotype scoring: {}", if settings.enable_haplotype_scoring { "ENABLED" } else { "DISABLED" });
+        info!("\tWeighted haplotype scoring: {}", if settings.enable_weighted_haplotype_scoring { "ENABLED" } else { "DISABLED" });
+        info!("\tRecord-basepair scoring: {}", if settings.enable_record_basepair_scoring { "ENABLED" } else { "DISABLED" });
     }
 
     // 0 is just a sentinel for everything

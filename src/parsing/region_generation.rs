@@ -241,7 +241,6 @@ impl RegionIterator {
         // now pre-load all the variants in parallel
         let style = get_progress_style();
         self.preloaded_variants = Some(load_keys.into_par_iter()
-            .progress_with_style(style)
             .map(|(vi, chrom_index)| {
                 // get the full chrom region
                 let full_chrom_region = &full_chrom_regions[chrom_index];
@@ -267,6 +266,7 @@ impl RegionIterator {
                     Err(e) => Err(e)
                 }
             })
+            .progress_with_style(style)
             .collect::<anyhow::Result<_>>()?);
 
         Ok(())
@@ -592,6 +592,10 @@ fn parse_variant(
         }
         let position = (pos.get() - 1) as u64; // convert to 0-based
 
+        // save the raw allele space, which is the maximum length of the two alleles
+        // we want this prior to trimming so it matches the original records
+        let raw_allele_space = ref_sequence.len().max(alt_sequence.len());
+
         // trim off any extra bases at the end
         while enable_trimming && ref_sequence.len() > 1 && alt_sequence.len() > 1 && ref_sequence.last().unwrap() == alt_sequence.last().unwrap() {
             assert!(ref_sequence.pop().is_some());
@@ -607,7 +611,7 @@ fn parse_variant(
         }
 
         let variant_type = get_variant_type(record, &ref_sequence, &alt_sequence)?;
-        let variant = match variant_type {
+        let mut variant = match variant_type {
             VariantType::Snv => Variant::new_snv(0, position, ref_sequence, alt_sequence),
             VariantType::Insertion => Variant::new_insertion(0, position, ref_sequence, alt_sequence),
             VariantType::Deletion => Variant::new_deletion(0, position, ref_sequence, alt_sequence),
@@ -625,6 +629,10 @@ fn parse_variant(
             _ => bail!("No impl for {variant_type:?}")
         }?;
 
+        // set the raw allele space, which was captured prior to trimming
+        variant.set_raw_allele_space(raw_allele_space)?;
+
+        // save the variant
         ret.push((variant, zygosity));
     }
     Ok(ret)

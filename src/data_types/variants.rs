@@ -62,7 +62,9 @@ pub enum VariantError {
     #[error("TR contraction ALT length must be < REF length")]
     TrContractionLen,
     #[error("TR expansion ALT length must be >= REF length")]
-    TrExpansionLen
+    TrExpansionLen,
+    #[error("raw allele space must be >= allele0 and allele1 length")]
+    RawAlleleSpace
 }
 
 /// A variant definition structure.
@@ -79,6 +81,9 @@ pub struct Variant {
     allele0: Vec<u8>,
     /// the second allele value
     allele1: Vec<u8>,
+
+    // the maximum raw length of either allele
+    raw_allele_space: usize,
 
     // auxiliary booleans
     /// if true, flags this as a variant to ignore for _some_ reason
@@ -104,12 +109,14 @@ impl Variant {
             return Err(VariantError::AlleleLen1 { index: 1 });
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::Snv,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -134,12 +141,14 @@ impl Variant {
             return Err(VariantError::AlleleLen1 { index: 1 });
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::Deletion,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -163,12 +172,14 @@ impl Variant {
             return Err(VariantError::AltLenGT1);
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::Insertion,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -196,12 +207,14 @@ impl Variant {
         // we've seen it not work above, not worth even trying to codify warning here IMO
         // assert!(???)
         
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::Indel,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -227,12 +240,14 @@ impl Variant {
             return Err(VariantError::SvDeletionLen);
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::SvDeletion,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -257,12 +272,14 @@ impl Variant {
             return Err(VariantError::EmptyAllele { index: 0 });
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::SvInsertion,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -290,12 +307,14 @@ impl Variant {
             return Err(VariantError::TrContractionLen);
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::TrContraction,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
@@ -323,16 +342,34 @@ impl Variant {
             return Err(VariantError::TrExpansionLen);
         }
 
+        let raw_allele_space = allele0.len().max(allele1.len());
         Ok(Variant {
             vcf_index,
             variant_type: VariantType::TrExpansion,
             position,
             allele0,
             allele1,
+            raw_allele_space,
             is_ignored: false
         })
     }
 
+    /// Sets the raw length this variant. This is the maximum length of the two alleles.
+    /// Must be greater than or equal to the lengths of the stored alleles.
+    /// This is used for the RECORD_BP metrics, which are based on the raw allele space.
+    /// # Arguments
+    /// * `raw_allele_space` - the new raw allele space to set
+    /// # Errors
+    /// * if the provided raw allele space is less than the maximum length of the stored alleles
+    pub fn set_raw_allele_space(&mut self, raw_allele_space: usize) -> Result<(), VariantError> {
+        if raw_allele_space < self.allele0.len().max(self.allele1.len()) {
+            return Err(VariantError::RawAlleleSpace);
+        }
+        self.raw_allele_space = raw_allele_space;
+        Ok(())
+    }
+
+    /// Sets the variant to be ignored
     pub fn set_ignored(&mut self) {
         self.is_ignored = true;
     }
@@ -402,6 +439,10 @@ impl Variant {
         &self.allele1
     }
 
+    pub fn raw_allele_space(&self) -> usize {
+        self.raw_allele_space
+    }
+
     pub fn is_ignored(&self) -> bool {
         self.is_ignored
     }
@@ -420,6 +461,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::Snv);
         assert_eq!(variant.position(), 1);
         assert_eq!(variant.ref_len(), 1);
+        assert_eq!(variant.raw_allele_space(), 1);
         assert_eq!(variant.match_allele(b"A"), 0);
         assert_eq!(variant.match_allele(b"C"), 1);
         assert_eq!(variant.match_allele(b"G"), 2);
@@ -436,6 +478,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::Deletion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.ref_len(), 3);
+        assert_eq!(variant.raw_allele_space(), 3);
         assert_eq!(variant.match_allele(b"AGT"), 0);
         assert_eq!(variant.match_allele(b"A"), 1);
         assert_eq!(variant.match_allele(b"AG"), 2);
@@ -450,6 +493,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::Insertion);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.ref_len(), 1);
+        assert_eq!(variant.raw_allele_space(), 3);
         assert_eq!(variant.match_allele(b"A"), 0);
         assert_eq!(variant.match_allele(b"AGT"), 1);
         assert_eq!(variant.match_allele(b"AG"), 2);
@@ -465,6 +509,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::Indel);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.ref_len(), 2);
+        assert_eq!(variant.raw_allele_space(), 3);
         assert_eq!(variant.match_allele(b"A"), 2);
         assert_eq!(variant.match_allele(b"AGT"), 1);
         assert_eq!(variant.match_allele(b"AG"), 0);
@@ -479,6 +524,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::SvInsertion);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.ref_len(), 1);
+        assert_eq!(variant.raw_allele_space(), 3);
 
         // TODO: replace this with the matching we will do with SVs
         assert_eq!(variant.match_allele(b"A"), 0);
@@ -495,6 +541,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::SvDeletion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.ref_len(), 3);
+        assert_eq!(variant.raw_allele_space(), 3);
 
         // TODO: replace this with the matching we will do with SVs
         assert_eq!(variant.match_allele(b"AGT"), 0);
@@ -512,6 +559,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::TrExpansion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.ref_len(), 4);
+        assert_eq!(variant.raw_allele_space(), 8);
 
         assert_eq!(variant.match_allele(b"AAAC"), 0);
         assert_eq!(variant.match_allele(b"AAACAAAC"), 1);
@@ -528,6 +576,7 @@ mod tests {
         assert_eq!(variant.variant_type(), VariantType::TrContraction);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.ref_len(), 8);
+        assert_eq!(variant.raw_allele_space(), 8);
 
         assert_eq!(variant.match_allele(b"AAACAAAC"), 0);
         assert_eq!(variant.match_allele(b"AAAC"), 1);

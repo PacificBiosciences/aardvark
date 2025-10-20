@@ -27,6 +27,7 @@ Authors: [Matt Holt](https://github.com/holtjma), [Zev Kronenberg](https://githu
 * [Installation instructions](./docs/install.md)
 * [User guide with quickstart](./docs/user_guide.md)
 * [Output files](./docs/user_guide.md#output-files)
+* [Recommended settings](./docs/recommended_settings.md)
 * [Methods](./docs/methods.md)
 * [Performance](./docs/performance.md)
 
