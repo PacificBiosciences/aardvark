@@ -2,9 +2,12 @@ name: Static CI
 
 on: [push, pull_request]
 
+env:
+  RUST_VERSION: 1.88.0
+
 jobs:
   call-external:
     uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.4.0
     with:
-      rust_version: 1.88.0
+      rust_version: ${{ env.RUST_VERSION }}
       test_docs: true

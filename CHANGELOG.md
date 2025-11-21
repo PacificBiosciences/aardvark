@@ -1,3 +1,8 @@
+# v0.10.0
+## Changes
+- GitHub release workflow updated to auto-publish to crates.io
+- The library has been renamed to `aardvark-bio` for publishing to crates.io, binary name is unchanged
+
 # v0.9.0
 ## Changes
 - Adds the optional `RECORD_BP` comparison type to all summary files. Review our [methods](./docs/methods.md#record-basepair) for details on this metric. This metric is enabled with `--enable-record-basepair-metrics`.

@@ -1,8 +1,8 @@
 [
   {
-    "name": "aardvark",
-    "version": "0.9.0",
-    "authors": null,
+    "name": "aardvark-bio",
+    "version": "0.10.0",
+    "authors": "holtjma <mholt@pacificbiosciences.com>",
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
     "license_file": null,
