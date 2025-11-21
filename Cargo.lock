@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aardvark-bio"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "approx_eq",
@@ -1342,8 +1342,9 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "rust-lib-reference-genome"
-version = "0.2.0"
-source = "git+https://github.com/holtjma/rust-lib-reference-genome.git?tag=v0.2.0#6d6925118653654ef4d38b86f23b55079dad6f6c"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9967a802d833a491b7c1c90bcd984944d7474a2737beb3c2f82c4f01c41413d8"
 dependencies = [
  "bio",
  "flate2",
