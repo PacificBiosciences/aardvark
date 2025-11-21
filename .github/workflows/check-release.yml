@@ -87,3 +87,19 @@ jobs:
       binary_name: aardvark
       tag: ${{ needs.check-new-tag.outputs.tag }}
       rust_version: 1.88.0 # ideally, this would be an env variable, but actions does not seem to support that
+
+  publish-to-crates-io:
+    name: Publish to Crates.io
+    needs: [check-new-tag, run-tests] # only run if the tests passed
+    if: needs.check-new-tag.outputs.release_exists == 'false'
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1.88.0 # rust version needs to match
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Publish to Crates.io
+      run: cargo publish
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -5,27 +5,27 @@ use rayon::prelude::*;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
 use std::time::Instant;
 
-use aardvark::cli::compare::{CompareSettings, check_compare_settings};
-use aardvark::cli::core::{Commands, get_cli};
-use aardvark::cli::merge::{MergeSettings, check_merge_settings};
-use aardvark::data_types::compare_benchmark::CompareBenchmark;
-use aardvark::data_types::compare_region::CompareRegion;
-use aardvark::data_types::grouped_metrics::MetricsType;
-use aardvark::data_types::merge_benchmark::MergeBenchmark;
-use aardvark::data_types::multi_region::MultiRegion;
-use aardvark::merge_solver::{MergeConfigBuilder, solve_merge_region};
-use aardvark::parsing::region_generation::RegionIterator;
-use aardvark::parsing::stratifications::Stratifications;
-use aardvark::util::json_io::save_json;
-use aardvark::util::progress_bar::get_progress_style;
-use aardvark::waffle_solver::{solve_compare_region, CompareConfigBuilder};
-use aardvark::writers::compare_parallel::write_compare_outputs;
-use aardvark::writers::merge_summary::MergeSummaryWriter;
-use aardvark::writers::region_sequence::RegionSequenceWriter;
-use aardvark::writers::region_summary::RegionSummaryWriter;
-use aardvark::writers::summary::SummaryWriter;
-use aardvark::writers::variant_categorizer::VariantCategorizer;
-use aardvark::writers::variant_merger::{VariantMerger, index_merger};
+use aardvark_bio::cli::compare::{CompareSettings, check_compare_settings};
+use aardvark_bio::cli::core::{Commands, get_cli};
+use aardvark_bio::cli::merge::{MergeSettings, check_merge_settings};
+use aardvark_bio::data_types::compare_benchmark::CompareBenchmark;
+use aardvark_bio::data_types::compare_region::CompareRegion;
+use aardvark_bio::data_types::grouped_metrics::MetricsType;
+use aardvark_bio::data_types::merge_benchmark::MergeBenchmark;
+use aardvark_bio::data_types::multi_region::MultiRegion;
+use aardvark_bio::merge_solver::{MergeConfigBuilder, solve_merge_region};
+use aardvark_bio::parsing::region_generation::RegionIterator;
+use aardvark_bio::parsing::stratifications::Stratifications;
+use aardvark_bio::util::json_io::save_json;
+use aardvark_bio::util::progress_bar::get_progress_style;
+use aardvark_bio::waffle_solver::{solve_compare_region, CompareConfigBuilder};
+use aardvark_bio::writers::compare_parallel::write_compare_outputs;
+use aardvark_bio::writers::merge_summary::MergeSummaryWriter;
+use aardvark_bio::writers::region_sequence::RegionSequenceWriter;
+use aardvark_bio::writers::region_summary::RegionSummaryWriter;
+use aardvark_bio::writers::summary::SummaryWriter;
+use aardvark_bio::writers::variant_categorizer::VariantCategorizer;
+use aardvark_bio::writers::variant_merger::{VariantMerger, index_merger};
 
 fn run_compare(settings: CompareSettings) {
     // start the timer
