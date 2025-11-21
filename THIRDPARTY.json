@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark-bio",
-    "version": "0.10.0",
+    "version": "0.10.1",
     "authors": "holtjma <mholt@pacificbiosciences.com>",
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -1270,12 +1270,12 @@
   },
   {
     "name": "rust-lib-reference-genome",
-    "version": "0.2.0",
-    "authors": null,
-    "repository": null,
-    "license": null,
+    "version": "0.2.1",
+    "authors": "holtjma <mholt@pacificbiosciences.com>",
+    "repository": "https://github.com/holtjma/rust-lib-reference-genome",
+    "license": "BSD-3-Clause",
     "license_file": null,
-    "description": null
+    "description": "Reference genome library for Rust"
   },
   {
     "name": "rustc-hash",

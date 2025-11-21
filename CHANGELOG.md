@@ -1,3 +1,7 @@
+# v0.10.1
+## Fixed
+- Fixed a versioning issue with dependencies
+
 # v0.10.0
 ## Changes
 - GitHub release workflow updated to auto-publish to crates.io
