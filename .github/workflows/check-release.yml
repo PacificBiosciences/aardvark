@@ -19,9 +19,6 @@ on:
     branches:
       - main
 
-env:
-  RUST_VERSION: 1.88.0
-
 jobs:
   check-new-tag:
     runs-on: ubuntu-latest
@@ -73,7 +70,7 @@ jobs:
     needs: check-new-tag
     if: needs.check-new-tag.outputs.release_exists == 'false'
     with:
-      rust_version: ${{ RUST_VERSION }} # if you change these, you need to update the create-release version also (below)
+      rust_version: 1.88.0 # if you change these, you need to update the create-release version also (below)
       test_docs: true
 
   # Build the binary and tarball wrapping the binary
@@ -89,7 +86,7 @@ jobs:
       release_name: 'Aardvark'
       binary_name: aardvark
       tag: ${{ needs.check-new-tag.outputs.tag }}
-      rust_version: ${{ RUST_VERSION }} # ideally, this would be an env variable, but actions does not seem to support that
+      rust_version: 1.88.0 # ideally, this would be an env variable, but actions does not seem to support that
 
   publish-to-crates-io:
     name: Publish to Crates.io
@@ -97,7 +94,7 @@ jobs:
     if: needs.check-new-tag.outputs.release_exists == 'false'
     runs-on: ubuntu-latest
     container:
-      image: rust:${{ RUST_VERSION }}
+      image: rust:1.88.0 # rust version needs to match
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
