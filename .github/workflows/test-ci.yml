@@ -9,5 +9,5 @@ jobs:
   call-external:
     uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.4.0
     with:
-      rust_version: ${{ env.RUST_VERSION }}
+      rust_version: ${{ RUST_VERSION }}
       test_docs: true
