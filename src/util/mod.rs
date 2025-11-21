@@ -1,3 +1,7 @@
+/*!
+# Utility module
+Contains generic utility functions that are not particularly specific to aardvark-bio.
+*/
 
 /// Helper functions for read/writing JSON via serde
 pub mod json_io;

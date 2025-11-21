@@ -65,7 +65,7 @@ jobs:
 
   run-tests:
     name: run_static_tests
-    uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.4.0
+    uses: holtjma/shared_github_workflows/.github/workflows/rust-static-test.yml@v0.5.0
     # uses: ./.github/workflows/rust-static-test.yml
     needs: check-new-tag
     if: needs.check-new-tag.outputs.release_exists == 'false'
@@ -78,7 +78,7 @@ jobs:
     name: Call create-release workflow
     needs: [check-new-tag, run-tests] # only run if the tests passed
     if: needs.check-new-tag.outputs.release_exists == 'false'
-    uses: holtjma/shared_github_workflows/.github/workflows/create-release.yml@v0.4.0
+    uses: holtjma/shared_github_workflows/.github/workflows/create-release.yml@v0.5.0
     #uses: ./.github/workflows/create-release.yml
     permissions:
       contents: write

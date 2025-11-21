@@ -1,3 +1,55 @@
+/*!
+# Query Optimizer
+Contains the logic for optimizing the query sequences relative to the truth sequences in a haplotype pair.
+This is implicitly looking for the best phasing of the query variants to match the truth variants.
+Scoring minimizing the edit distance between the two sequences, while respecting the truth phase orientation when provided.
+Conceptually, this is a branch-and-bound approach that maximizes the BASEPAIR accuracy downstream.
+There may be some edge cases where this is not optimal for GT-based scoring.
+
+## Example usage
+```rust
+use aardvark_bio::data_types::coordinates::Coordinates;
+use aardvark_bio::data_types::phase_enums::PhasedZygosity;
+use aardvark_bio::data_types::variants::Variant;
+use aardvark_bio::query_optimizer::optimize_sequences;
+
+// create a simple reference string with coordinates for the region
+let reference = b"ACGTACGTACGT";
+let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+
+// create two truth haplotype sequences for comparison later
+let truth_seq1 = b"ACGTAAGTACGT"; // C->A SNV
+let truth_seq2 = b"ACGTAGGTACGT"; // C->G SNV
+
+// these are the corresponding truth variants and zygosities for the truth sequences
+let shared_variants = [
+    Variant::new_snv(0, 5, b"C".to_vec(), b"A".to_vec()).unwrap(),
+    Variant::new_snv(0, 5, b"C".to_vec(), b"G".to_vec()).unwrap()
+];
+let truth_zygosity = [
+    PhasedZygosity::PhasedHet10,
+    PhasedZygosity::PhasedHet01,
+];
+
+// in this example, the variants are identical, but the query zygosities are unphased
+let query_zygosity = [
+    PhasedZygosity::UnphasedHeterozygous,
+    PhasedZygosity::UnphasedHeterozygous,
+];
+
+// now run the optimizer
+let query_sequences = optimize_sequences(
+    reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity
+).unwrap()[0].clone();
+
+// should be exact matches, and our phasing is resolved also
+assert_eq!(query_sequences.ed1(), 0);
+assert_eq!(query_sequences.ed2(), 0);
+assert_eq!(query_sequences.query_seq1(), truth_seq1);
+assert_eq!(query_sequences.query_seq2(), truth_seq2);
+assert_eq!(query_sequences.query_zygosity(), &truth_zygosity);
+```
+*/
 
 use anyhow::bail;
 use log::debug;
