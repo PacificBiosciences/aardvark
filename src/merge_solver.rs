@@ -1,4 +1,51 @@
+/*!
+# Merge Solver
+Contains the logic for merging variant calls from multiple inputs.
+In general, the main use case is identifying regions that are identical across all inputs.
+However, there are controls via the `MergeConfig` struct that allow for more flexible merging strategies when there are conflicts.
 
+## Example usage
+```rust
+use aardvark_bio::data_types::coordinates::Coordinates;
+use aardvark_bio::data_types::merge_benchmark::MergeClassification;
+use aardvark_bio::data_types::multi_region::MultiRegion;
+use aardvark_bio::data_types::phase_enums::PhasedZygosity;
+use aardvark_bio::data_types::variants::Variant;
+use aardvark_bio::merge_solver::{solve_merge_region, MergeConfig, MergeConfigBuilder};
+use rust_lib_reference_genome::reference_genome::ReferenceGenome;
+
+// create a simple reference genome
+let mut reference_genome = ReferenceGenome::empty_reference();
+reference_genome.add_contig(
+    "mock_chr1".to_string(), "ACCGTTACCAGGACTTGACAAACCG"
+).unwrap();
+let coordinates = Coordinates::new("mock_chr1".to_string(), 0, 25);
+
+// create a 3-way merge of identical variants with different zygosity
+let variants = vec![
+    vec![Variant::new_snv(0, 5, b"T".to_vec(), b"C".to_vec()).unwrap()],
+    vec![Variant::new_snv(0, 5, b"T".to_vec(), b"C".to_vec()).unwrap()],
+    vec![Variant::new_snv(0, 5, b"T".to_vec(), b"C".to_vec()).unwrap()],
+];
+let zygosity = vec![
+    vec![PhasedZygosity::HomozygousAlternate],
+    vec![PhasedZygosity::PhasedHet01],
+    vec![PhasedZygosity::HomozygousAlternate],
+];
+
+// put it all into a MultiRegion object and solve it; this one will fail because of the zygosity difference
+let problem = MultiRegion::new(0, coordinates.clone(), variants.clone(), zygosity).unwrap();
+let result = solve_merge_region(&problem, &reference_genome, MergeConfig::default()).unwrap();
+assert_eq!(result.merge_classification(), &MergeClassification::Different);
+
+// now lets re-try with a voting strategy; here we get the majority agree, and the ones that agree are indices 0 and 2
+let merge_config = MergeConfigBuilder::default()
+    .majority_voting_enabled(true)
+    .build().unwrap();
+let result = solve_merge_region(&problem, &reference_genome, merge_config).unwrap();
+assert_eq!(result.merge_classification(), &MergeClassification::MajorityAgree { indices: vec![0, 2] });
+```
+*/
 use anyhow::ensure;
 use derive_builder::Builder;
 use log::debug;

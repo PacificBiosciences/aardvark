@@ -1,4 +1,8 @@
-
+/*!
+# Data types module
+Contains various data types that are used throughout the library.
+These are intended to be self-contained units that can be used by multiple modules within the library.
+*/
 /// Contains comparison benchmark results for a given sub-unit of the full task
 pub mod compare_benchmark;
 /// Contains comparison regions which serve as a sub-unit for solving

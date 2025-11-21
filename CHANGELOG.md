@@ -1,3 +1,10 @@
+# v0.10.2
+## Changes
+- Improved inline documentation that appears on docs.rs
+
+## Fixed
+- Updates the GitHub workflows to patch an issue with tarball version naming
+
 # v0.10.1
 ## Fixed
 - Fixed a versioning issue with dependencies

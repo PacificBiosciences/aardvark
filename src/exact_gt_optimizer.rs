@@ -1,3 +1,44 @@
+/*!
+# Exact GT Optimizer
+Contains the logic for optimizing the exact GT category.
+This is a branch-and-bound approach that will find the minimum number of ALT -> REF changes to make the sequences exactly match.
+This approach assigns no partial credit, even if there are sequences "close" to each other.
+
+## Example usage
+```rust
+use aardvark_bio::data_types::coordinates::Coordinates;
+use aardvark_bio::data_types::variants::Variant;
+use aardvark_bio::data_types::phase_enums::Allele;
+use aardvark_bio::exact_gt_optimizer::optimize_gt_alleles;
+
+// create a simple reference string with coordinates for the region
+let reference = b"ACGTACGTACGT";
+let coordinates = Coordinates::new("mock".to_string(), 0, reference.len() as u64);
+
+// create a truth variants with allele state, copy for query (exact match)
+let truth_variants = vec![
+    // 0-based position is 5, C>G SNV
+    Variant::new_snv(0, 5, b"C".to_vec(), b"G".to_vec()).unwrap()
+];
+let truth_alleles = vec![
+    Allele::Alternate
+];
+let query_variants = truth_variants.clone();
+let query_alleles = truth_alleles.clone();
+
+// run the optimizer
+let result = optimize_gt_alleles(
+    reference, &coordinates,
+    &truth_variants, &truth_alleles,
+    &query_variants, &query_alleles
+).unwrap();
+
+// check the results
+assert!(result.is_exact_match());
+assert_eq!(result.num_errors(), 0);
+assert_eq!(result.truth_alleles(), &truth_alleles);
+assert_eq!(result.query_alleles(), &query_alleles);
+*/
 
 use anyhow::bail;
 use log::{debug, trace};

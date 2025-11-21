@@ -1,4 +1,7 @@
-
+/*!
+# Writers module
+Contains the logic for writing the output files for the compare and merge commands.
+*/
 /// Wrapper that handles the parallel writing of all outputs at the compare step
 pub mod compare_parallel;
 /// Generates the summary file for merging
