@@ -1,3 +1,8 @@
+# v0.10.3
+## Fixed
+- Improved error reporting from VCF parsing to indicate the most recently parsed record
+- Fixed an off-by-one error in the output of the merge region BED files
+
 # v0.10.2
 ## Changes
 - Improved inline documentation that appears on docs.rs

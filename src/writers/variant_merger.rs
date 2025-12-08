@@ -181,11 +181,14 @@ impl VariantMerger {
 
         if let Some(source) = opt_source {
             // these are passing regions, save variants and the region
-            self.write_variants(source, region, benchmark.merge_classification())?;
-            self.write_region(region, benchmark.merge_classification(), true)?;
+            self.write_variants(source, region, benchmark.merge_classification())
+                .with_context(|| "Error while writing variants:")?;
+            self.write_region(region, benchmark.merge_classification(), true)
+                .with_context(|| "Error while writing region:")?;
         } else {
             // else it's going to the failed regions
-            self.write_region(region, benchmark.merge_classification(), false)?;
+            self.write_region(region, benchmark.merge_classification(), false)
+                .with_context(|| "Error while writing region:")?;
         }
         Ok(())
     }
@@ -292,8 +295,8 @@ impl VariantMerger {
         // build the record using the provided inputs; this is most positional
         let record = noodles::bed::feature::record_buf::RecordBuf::<4>::builder()
             .set_reference_sequence_name(region.coordinates().chrom())
-            .set_feature_start(Position::try_from(region.coordinates().start() as usize)?)
-            .set_feature_end(Position::try_from(region.coordinates().end() as usize)?)
+            .set_feature_start(Position::try_from(region.coordinates().start() as usize + 1)?) // +1 because Position is 1-based inclusive
+            .set_feature_end(Position::try_from(region.coordinates().end() as usize)?) // no addition because Position is 1-based inclusive
             .set_name(format!("{}_{}", merge_classification.simplify(), region.region_id()))
             .build();
 
