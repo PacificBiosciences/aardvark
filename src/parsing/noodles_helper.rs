@@ -54,6 +54,9 @@ impl LoadedBed {
         let mut record = BedRecord::<3>::default();
         let mut chrom_lookup: IndexMap<String, Vec<Interval>> = Default::default();
         while bed_handle.read_record(&mut record)? > 0 {
+            // BED records are 0-based exclusive end; e.g. [1000, 1100)
+            // Intervals are 1-based inclusive; e.g. [1001, 1100]
+            // Thus, the starts will appear off-by-one downstream of here if we are using tradition Rust ranges
             let chrom = record.reference_sequence_name().to_string();
             let start = record.feature_start()
                 .with_context(|| format!("Error while parsing start for record: {record:?}"))?;

@@ -520,14 +520,29 @@ fn load_variants_in_region(
         }
     };
 
+    // track the last position to help with error messages
+    let mut last_pos = None;
     for result in query {
-        let record: Box<dyn vcf::variant::Record> = result?;
-        let record_buf = vcf::variant::RecordBuf::try_from_variant_record(vcf_header, record.as_ref())?;
+        let record: Box<dyn vcf::variant::Record> = result
+            .with_context(|| if let Some(p) = last_pos {
+                format!("Error while parsing variant record after: {p:?}")
+            } else {
+                "Error while parsing first variant record".to_string()
+            })?;
+        let record_buf = vcf::variant::RecordBuf::try_from_variant_record(vcf_header, record.as_ref())
+            .with_context(|| if let Some(p) = last_pos {
+                format!("Error while converting variant record to buffer after: {p:?}")
+            } else {
+                "Error while converting first variant record to buffer".to_string()
+            })?;
     
         let variants = parse_variant(&record_buf, sample_index, enable_trimming)
             .with_context(|| {
                 format!("Error parsing variants in {record_buf:?}:")
             })?;
+
+        // update the last position
+        last_pos = Some(record_buf.variant_start().unwrap());
 
         // add them to the list
         trace!("\tFound {variants:?}");
