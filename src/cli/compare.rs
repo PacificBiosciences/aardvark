@@ -1,5 +1,5 @@
 
-use anyhow::bail;
+use anyhow::ensure;
 use clap::Args;
 use log::info;
 use serde::Serialize;
@@ -109,6 +109,13 @@ pub struct CompareSettings {
     #[clap(default_value = "5000")]
     #[clap(hide = true)] // if you remove this, make sure you re-enable the CLI outputs
     pub max_edit_distance: usize,
+
+    /// Maximum branch factor in the query optimizer; limits work on dense variant regions
+    #[clap(long = "max-branch-factor")]
+    #[clap(value_name = "INT")]
+    #[clap(help_heading = Some("Compare parameters"))]
+    #[clap(default_value = "50")]
+    pub max_branch_factor: usize,
 
     /// Enables an exact-match compute shortcut at the cost of variant-level assessment accuracy
     #[clap(long = "enable-exact-shortcut")]
@@ -220,15 +227,14 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
 
     // other misc parameters
     info!("Region generation parameters:");
-    if settings.min_variant_gap == 0 {
-        bail!("--min-variant-gap must be >0");
-    }
+    ensure!(settings.min_variant_gap > 0, "--min-variant-gap must be >0");
     info!("\tMinimum variant gap: {}", settings.min_variant_gap);
     info!("\tVariant trimming: {}", if settings.disable_variant_trimming { "DISABLED "} else { "ENABLED" });
 
+    info!("Compare parameters:");
+    ensure!(settings.max_branch_factor > 0, "--max-branch-factor must be >0");
+    info!("\tMax branch factor: {}", settings.max_branch_factor);
     if settings.enable_exact_shortcut {
-        info!("Compare parameters:");
-        // info!("\tMax edit distance: {}", settings.max_edit_distance); // we removed this
         info!("\tExact match shortcut: {}", if settings.enable_exact_shortcut { "ENABLED" } else { "DISABLED" });
     }
 

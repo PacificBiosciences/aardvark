@@ -139,6 +139,13 @@ pub struct MergeSettings {
     #[clap(help_heading = Some("Merge parameters"))]
     pub conflict_selection: Option<usize>,
 
+    /// Maximum branch factor in the query optimizer; limits work on dense variant regions
+    #[clap(long = "max-branch-factor")]
+    #[clap(value_name = "INT")]
+    #[clap(help_heading = Some("Merge parameters"))]
+    #[clap(default_value = "50")]
+    pub max_branch_factor: usize,
+
     /// Number of threads to use in the benchmarking step
     #[clap(long = "threads")]
     #[clap(value_name = "THREADS")]
@@ -236,6 +243,8 @@ pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<Merge
     }
     info!("\tNo conflict blocks: {}", if settings.enable_no_conflict { "ENABLED" } else { "DISABLED" });
     info!("\tMajority voting blocks: {}", if settings.enable_voting { "ENABLED" } else { "DISABLED" });
+    ensure!(settings.max_branch_factor > 0, "--max-branch-factor must be >0");
+    info!("\tMax branch factor: {}", settings.max_branch_factor);
 
     if let Some(v_index) = settings.conflict_selection {
         ensure!(v_index < settings.vcf_filenames.len(), "--conflict-selection index is greater than number of provided VCFs");
