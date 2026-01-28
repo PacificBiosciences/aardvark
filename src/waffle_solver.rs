@@ -98,6 +98,8 @@ pub struct CompareConfig {
     enable_sequences: bool,
     /// if True, this will enable a compute shortcut for exact-matching sequences at the cost of some variant-level assessment accuracy
     enable_exact_shortcut: bool,
+    /// maximum branch factor in the query optimizer; limits exponential blowup
+    max_branch_factor: usize,
 }
 
 impl Default for CompareConfig {
@@ -106,7 +108,8 @@ impl Default for CompareConfig {
         // main.rs will set each of them manually based on user input
         Self {
             enable_sequences: true,
-            enable_exact_shortcut: false
+            enable_exact_shortcut: false,
+            max_branch_factor: 50,
         }
     }
 }
@@ -140,7 +143,8 @@ pub fn solve_compare_region(
     let all_optimized_haplotypes = optimize_sequences(
         reference, coordinates,
         truth_variants, raw_truth_zygosity,
-        query_variants, raw_query_zygosity
+        query_variants, raw_query_zygosity,
+        compare_config.max_branch_factor
     )?;
     debug!("B#{problem_id} Found {} equal solutions, scoring by ALT flips...", all_optimized_haplotypes.len());
 

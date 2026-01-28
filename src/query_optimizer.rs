@@ -39,7 +39,7 @@ let query_zygosity = [
 
 // now run the optimizer
 let query_sequences = optimize_sequences(
-    reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity
+    reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity, 50
 ).unwrap()[0].clone();
 
 // should be exact matches, and our phasing is resolved also
@@ -51,7 +51,7 @@ assert_eq!(query_sequences.query_zygosity(), &truth_zygosity);
 ```
 */
 
-use anyhow::bail;
+use anyhow::ensure;
 use log::debug;
 use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
@@ -158,6 +158,7 @@ impl OptimizedHaplotypes {
 /// * `truth_zygosity` - the provided set of zygosities; assumed to all be in the same phase block
 /// * `query_variants` - the set of query variants
 /// * `query_zygosity` - the corresponding zygosity of each query variant, must be heterozygous or homozygous alternate
+/// * `max_branch_factor` - the maximum branch factor in the query optimizer; limits exponential blowup
 /// # Errors
 /// * if there are errors from DWFA extension or finalization
 /// # Panics
@@ -166,17 +167,14 @@ pub fn optimize_sequences(
     reference: &[u8], coordinates: &Coordinates,
     truth_variants: &[Variant], truth_zygosity: &[PhasedZygosity],
     query_variants: &[Variant], query_zygosity: &[PhasedZygosity],
+    max_branch_factor: usize,
 ) -> anyhow::Result<Vec<OptimizedHaplotypes>> {
     debug!("Starting sequence optimization...");
 
     // do some sanity checks
-    if truth_variants.len() != truth_zygosity.len() {
-        bail!("truth values must have equal length");
-    }
-
-    if query_variants.len() != query_zygosity.len() {
-        bail!("query values must have equal length");
-    }
+    ensure!(truth_variants.len() == truth_zygosity.len(), "truth values must have equal length");
+    ensure!(query_variants.len() == query_zygosity.len(), "query values must have equal length");
+    ensure!(max_branch_factor > 0, "max_branch_factor must be greater than 0");
 
     // first, figure out the order we are calculating variants in
     let all_variant_order: Vec<(usize, bool)> = order_variants(truth_variants, query_variants);
@@ -199,7 +197,6 @@ pub fn optimize_sequences(
 
     // this tracks how many nodes of length L are encountered, and ignores any beyond our heuristic cutoff
     // in testing, this just prevent exponential blowup from purely FP variants in query
-    let max_per_bucket = 50; // TODO: CLI option
     let mut bucket_counts = vec![0; total_variant_count+1];
 
     // loop while our queue is not empty
@@ -222,7 +219,7 @@ pub fn optimize_sequences(
         }
 
         // make sure we didn't fill our quota for this bucket size
-        if bucket_counts[order_index] >= max_per_bucket {
+        if bucket_counts[order_index] >= max_branch_factor {
             continue;
         }
         bucket_counts[order_index] += 1;
@@ -331,9 +328,7 @@ pub fn optimize_sequences(
     }
     debug!("Best ED: {best_ed}");
 
-    if best_results.is_empty() {
-        bail!("no results found");
-    }
+    ensure!(!best_results.is_empty(), "no results found");
 
     // convert each node into OptimizedHaplotypes
     let ret = best_results.into_iter()
@@ -503,6 +498,8 @@ impl ComparisonNode {
 mod tests {
     use super::*;
 
+    const MAX_BRANCH_FACTOR_TEST: usize = 50;
+
     #[test]
     fn test_comparison_node() {
         // simple test for the diplotype level
@@ -560,7 +557,7 @@ mod tests {
         
         // first, run a set of empty variants against truth, everything should be FP
         let sequences = optimize_sequences(
-            reference, &coordinates, &truth_variants, &truth_zygosity, &query_variants, &query_zygosity
+            reference, &coordinates, &truth_variants, &truth_zygosity, &query_variants, &query_zygosity, MAX_BRANCH_FACTOR_TEST
         ).unwrap()[0].clone();
 
         assert_eq!(sequences.ed1(), 1);
@@ -591,7 +588,7 @@ mod tests {
 
         // first, run a set of empty variants against truth, everything should be FP
         let sequences = optimize_sequences(
-            reference, &coordinates, &truth_variants, &truth_zygosity, &query_variants, &query_zygosity
+            reference, &coordinates, &truth_variants, &truth_zygosity, &query_variants, &query_zygosity, MAX_BRANCH_FACTOR_TEST
         ).unwrap()[0].clone();
 
         assert_eq!(sequences.ed1(), 1);
@@ -623,7 +620,7 @@ mod tests {
 
         // first, run a set of empty variants against truth, everything should be FP
         let query_sequences = optimize_sequences(
-            reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity
+            reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity, MAX_BRANCH_FACTOR_TEST
         ).unwrap()[0].clone();
 
         // should be exact matches, and our phasing is resolved also
@@ -654,7 +651,7 @@ mod tests {
 
         // first, run a set of empty variants against truth, everything should be FP
         let query_sequences = optimize_sequences(
-            reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity
+            reference, &coordinates, &shared_variants, &truth_zygosity, &shared_variants, &query_zygosity, MAX_BRANCH_FACTOR_TEST
         ).unwrap()[0].clone();
 
         // should be exact matches, and our phasing is resolved also

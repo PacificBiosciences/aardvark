@@ -236,6 +236,7 @@ fn run_compare(settings: CompareSettings) {
     let compare_config = match CompareConfigBuilder::default()
         .enable_exact_shortcut(settings.enable_exact_shortcut)
         .enable_sequences(region_seq_writer.is_some())
+        .max_branch_factor(settings.max_branch_factor)
         .build() {
         Ok(cc) => cc,
         Err(e) => {
@@ -447,6 +448,7 @@ fn run_merge(settings: MergeSettings) {
         .no_conflict_enabled(settings.enable_no_conflict)
         .majority_voting_enabled(settings.enable_voting)
         .conflict_selection(settings.conflict_selection)
+        .max_branch_factor(settings.max_branch_factor)
         .build() {
         Ok(mc) => mc,
         Err(e) => {

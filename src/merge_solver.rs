@@ -59,7 +59,7 @@ use crate::data_types::variants::Variant;
 use crate::query_optimizer::optimize_sequences;
 
 /// Controls what passes our merging process
-#[derive(Builder, Clone, Copy, Default)]
+#[derive(Builder, Clone, Copy)]
 #[builder(default)]
 pub struct MergeConfig {
     /// if true, then blocks where every either agrees or has no variants will pass
@@ -67,7 +67,20 @@ pub struct MergeConfig {
     /// if true, a majority vote (all equal) will pass
     majority_voting_enabled: bool,
     /// If Some(v_index), then the corresponding VCF index will be selected if other method fails. This effectively removes failed regions.
-    conflict_selection: Option<usize>
+    conflict_selection: Option<usize>,
+    /// maximum branch factor in the query optimizer; limits exponential blowup
+    max_branch_factor: usize,
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            no_conflict_enabled: false,
+            majority_voting_enabled: false,
+            conflict_selection: None,
+            max_branch_factor: 50,
+        }
+    }
 }
 
 impl MergeConfig {
@@ -82,6 +95,10 @@ impl MergeConfig {
 
     pub fn conflict_selection(&self) -> Option<usize> {
         self.conflict_selection
+    }
+
+    pub fn max_branch_factor(&self) -> usize {
+        self.max_branch_factor
     }
 }
 
@@ -118,7 +135,7 @@ pub fn solve_merge_region(problem: &MultiRegion, reference_genome: &ReferenceGen
             let exact_match = if delta_scores[i] == delta_scores[j] {
                 // check the basepair level analysis
                 let all_opt_haps = optimize_sequences(
-                    reference, coordinates, v1, z1, v2, z2
+                    reference, coordinates, v1, z1, v2, z2, merge_strategy.max_branch_factor()
                 )?;
 
                 // we don't care which one is selected, we just want to check if the optimal score is ED=0
@@ -128,6 +145,8 @@ pub fn solve_merge_region(problem: &MultiRegion, reference_genome: &ReferenceGen
                 // they have different number of inserted/deleted bases, impossible to be an exact match
                 false
             };
+
+            debug!("B#{problem_id} Comparing inputs {i} and {j}, exact_match = {exact_match}");
 
             // handles the match category
             all_identical &= exact_match;
