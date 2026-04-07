@@ -1,3 +1,7 @@
+# v0.10.5
+## Fixed
+- Updated dependencies to remove known vulnerabilities
+
 # v0.10.4
 ## Changes
 - Exposes a new option `--max-branch-factor` in both `compare` and `merge` modes. This option controls a heuristic that limits the exploration of the sequence search space during query optimization. Increasing the value may lead to slightly more accurate results at the cost of increased compute requirements.

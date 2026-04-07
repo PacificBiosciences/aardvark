@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark-bio",
-    "version": "0.10.4",
+    "version": "0.10.5",
     "authors": "holtjma <mholt@pacificbiosciences.com>",
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -91,7 +91,7 @@
   },
   {
     "name": "anyhow",
-    "version": "1.0.97",
+    "version": "1.0.102",
     "authors": "David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/dtolnay/anyhow",
     "license": "Apache-2.0 OR MIT",
@@ -226,7 +226,7 @@
   },
   {
     "name": "bytes",
-    "version": "1.10.1",
+    "version": "1.11.1",
     "authors": "Carl Lerche <me@carllerche.com>|Sean McArthur <sean@seanmonstar.com>",
     "repository": "https://github.com/tokio-rs/bytes",
     "license": "MIT",
@@ -433,7 +433,7 @@
   },
   {
     "name": "deranged",
-    "version": "0.4.1",
+    "version": "0.5.8",
     "authors": "Jacob Pratt <jacob@jhpratt.dev>",
     "repository": "https://github.com/jhpratt/deranged",
     "license": "Apache-2.0 OR MIT",
@@ -1018,7 +1018,7 @@
   },
   {
     "name": "num-conv",
-    "version": "0.1.0",
+    "version": "0.2.1",
     "authors": "Jacob Pratt <jacob@jhpratt.dev>",
     "repository": "https://github.com/jhpratt/num-conv",
     "license": "Apache-2.0 OR MIT",
@@ -1306,7 +1306,7 @@
   },
   {
     "name": "rustversion",
-    "version": "1.0.20",
+    "version": "1.0.22",
     "authors": "David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/dtolnay/rustversion",
     "license": "Apache-2.0 OR MIT",
@@ -1342,7 +1342,7 @@
   },
   {
     "name": "serde",
-    "version": "1.0.219",
+    "version": "1.0.228",
     "authors": "Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/serde-rs/serde",
     "license": "Apache-2.0 OR MIT",
@@ -1350,8 +1350,17 @@
     "description": "A generic serialization/deserialization framework"
   },
   {
+    "name": "serde_core",
+    "version": "1.0.228",
+    "authors": "Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>",
+    "repository": "https://github.com/serde-rs/serde",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Serde traits only, with no support for derive -- use the `serde` crate instead"
+  },
+  {
     "name": "serde_derive",
-    "version": "1.0.219",
+    "version": "1.0.228",
     "authors": "Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/serde-rs/serde",
     "license": "Apache-2.0 OR MIT",
@@ -1522,7 +1531,7 @@
   },
   {
     "name": "time",
-    "version": "0.3.41",
+    "version": "0.3.47",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",
@@ -1531,7 +1540,7 @@
   },
   {
     "name": "time-core",
-    "version": "0.1.4",
+    "version": "0.1.8",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",
@@ -1540,7 +1549,7 @@
   },
   {
     "name": "time-macros",
-    "version": "0.2.22",
+    "version": "0.2.27",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",
@@ -1603,7 +1612,7 @@
   },
   {
     "name": "vergen",
-    "version": "9.0.4",
+    "version": "9.1.0",
     "authors": "Jason Ozias <jason.g.ozias@gmail.com>",
     "repository": "https://github.com/rustyhorde/vergen",
     "license": "Apache-2.0 OR MIT",
@@ -1612,7 +1621,7 @@
   },
   {
     "name": "vergen-gitcl",
-    "version": "1.0.5",
+    "version": "9.1.0",
     "authors": "Jason Ozias <jason.g.ozias@gmail.com>",
     "repository": "https://github.com/rustyhorde/vergen",
     "license": "Apache-2.0 OR MIT",
@@ -1621,7 +1630,7 @@
   },
   {
     "name": "vergen-lib",
-    "version": "0.1.6",
+    "version": "9.1.0",
     "authors": "Jason Ozias <jason.g.ozias@gmail.com>",
     "repository": "https://github.com/rustyhorde/vergen",
     "license": "Apache-2.0 OR MIT",
