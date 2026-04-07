@@ -1,6 +1,6 @@
 [package]
 name = "aardvark-bio"
-version = "0.10.4"
+version = "0.10.5"
 authors = ["holtjma <mholt@pacificbiosciences.com>"]
 edition = "2021"
 license = "MIT"
@@ -10,7 +10,7 @@ repository = "https://github.com/PacificBiosciences/aardvark"
 readme = "README.md"
 
 [build-dependencies]
-vergen-gitcl = { version = "1.0.5", features = ["build"] }
+vergen-gitcl = { version = "9.1.0", features = ["build"] }
 
 [dependencies]
 anyhow = "1.0.97"
