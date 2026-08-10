@@ -96,8 +96,6 @@ const SUPPORTED_VARIANT_TYPES: [VariantType; 8] = [
 pub struct CompareConfig {
     /// if True, saves the haplotype sequences which may consume more memory than normal
     enable_sequences: bool,
-    /// if True, this will enable a compute shortcut for exact-matching sequences at the cost of some variant-level assessment accuracy
-    enable_exact_shortcut: bool,
     /// maximum branch factor in the query optimizer; limits exponential blowup
     max_branch_factor: usize,
 }
@@ -108,7 +106,6 @@ impl Default for CompareConfig {
         // main.rs will set each of them manually based on user input
         Self {
             enable_sequences: true,
-            enable_exact_shortcut: false,
             max_branch_factor: 50,
         }
     }
@@ -167,38 +164,7 @@ pub fn solve_compare_region(
 
     let mut best_results = vec![];
     for optimized_haplotypes in all_optimized_haplotypes.into_iter() {
-        // check if the sequences are identical with 0 errors and 0 skipped variants
-        if compare_config.enable_exact_shortcut && optimized_haplotypes.is_exact_match() {
-            // TODO: account for phasing if we ever add it
-            debug!("B#{problem_id} exact match identified:");
-
-            // this compute truth and query at once, under the assumption of exact match
-            let mut exact_result = generate_exact_match(
-                problem,
-                truth_variants, raw_truth_zygosity,
-                query_variants, raw_query_zygosity,
-                &reference[ref_start..ref_end], &optimized_haplotypes
-            )?;
-
-            if compare_config.enable_sequences {
-                let bundle = SequenceBundle::new(
-                    String::from_utf8(ref_seq.to_vec())?,
-                    String::from_utf8(optimized_haplotypes.truth_seq1().to_vec())?,
-                    String::from_utf8(optimized_haplotypes.truth_seq2().to_vec())?,
-                    String::from_utf8(optimized_haplotypes.query_seq1().to_vec())?,
-                    String::from_utf8(optimized_haplotypes.query_seq2().to_vec())?,
-                );
-                exact_result.add_sequence_bundle(bundle);
-            }
-
-            if let Some(cr) = containment_regions {
-                exact_result.add_containment_regions(cr);
-            }
-
-            return Ok(exact_result);
-        }
-
-        // if we made it here, we did not find an exact match, so we need to tease apart which variants are FP and FN
+        // time to tease apart which variants are FP and FN
         let truth_zyg = optimized_haplotypes.truth_zygosity();
         let query_zyg = optimized_haplotypes.query_zygosity();
 
@@ -521,85 +487,6 @@ fn add_record_basepair_stats(
     Ok(())
 }
 
-/// Shortcut function for when we find a result that matches EXACTLY at the basepair level.
-/// # Arguments
-/// * `problem` - the original problem
-/// * `truth_variants` - variants that are considered truth
-/// * `truth_zygosity` - the zygosity of those variants
-/// * `query_variants` - variants that are considered truth
-/// * `query_zygosity` - the zygosity of those variants
-/// * `reference_sequence` - the reference sequence for the region (not full chrom)
-/// * `optimized_haps` - the haplotype sequences that were discovered
-#[allow(clippy::too_many_arguments)]
-fn generate_exact_match(
-    problem: &CompareRegion,
-    truth_variants: &[Variant], truth_zygosity: &[PhasedZygosity],
-    query_variants: &[Variant], query_zygosity: &[PhasedZygosity],
-    reference_sequence: &[u8], optimized_haps: &OptimizedHaplotypes
-) -> anyhow::Result<CompareBenchmark> {
-    // exact match, so ED = 0
-    let mut bench_result = CompareBenchmark::new(problem.region_id(), 0, 0);
-
-    // generate the expected zygosity counts and then add all of those exactly
-    let expected_zyg_counts = generate_expected_zyg_counts(truth_zygosity);
-    for (&ev, variant) in expected_zyg_counts.iter().zip(truth_variants.iter()) {
-        debug!("\t{ev}, ={ev}, {variant:?}");
-        bench_result.add_truth_zygosity(variant, ev, ev)
-            .with_context(|| format!("Failed to add summary stats for variant {variant:?}"))?;
-    }
-
-    // do the same 
-    let expected_query_counts = generate_expected_zyg_counts(query_zygosity);
-    for (&ev, variant) in expected_query_counts.iter().zip(query_variants.iter()) {
-        debug!("\t{ev}, ={ev}, {variant:?}");
-        bench_result.add_query_zygosity(variant, ev, ev)
-            .with_context(|| format!("Failed to add summary stats for variant {variant:?}"))?;
-    }
-
-    // REMEMBER: all basepair metrics are doubled to keep floating point away
-    // first, the full length metrics should always match, and effectively mask redundant variants
-    assert_eq!(optimized_haps.truth_seq1(), optimized_haps.query_seq1());
-    assert_eq!(optimized_haps.truth_seq2(), optimized_haps.query_seq2());
-
-    // figure out the base-pair level differences
-    let ed1 = wfa_ed(reference_sequence, optimized_haps.truth_seq1())?;
-    let ed2 = wfa_ed(reference_sequence, optimized_haps.truth_seq2())?;
-    let joint_ed_score = 2 * (ed1 + ed2) as u64;
-
-    // add them to both truth.TP and query.TP
-    let shared_metrics = SummaryMetrics::new(joint_ed_score, 0, joint_ed_score, 0);
-    bench_result.add_basepair_metrics(shared_metrics, None);
-
-    // now add metrics for the truth variants by type
-    for (&ev, variant) in expected_zyg_counts.iter().zip(truth_variants.iter())  {
-        // figure out how many bases are correctly added, which is the different in REF and ALT sequences for the variant
-        // we double everything here to avoid floating-point
-        let ref_alt_dist = 2 * variant.alt_ed()? as u64;
-        // create the metrics, scaling by expected zygosity
-        let var_metrics = SummaryMetrics::new((ev as u64)*ref_alt_dist, 0, 0, 0);
-
-        // add to the variant type
-        let variant_type = variant.variant_type();
-        bench_result.add_basepair_metrics(var_metrics, Some(variant_type));
-    }
-
-    // now add the query form metrics; in most cases these match, but different representations can create alternate variant-level metrics
-    let expected_query_counts = generate_expected_zyg_counts(query_zygosity);
-    for (&ev, variant) in expected_query_counts.iter().zip(query_variants.iter()) {
-        // figure out how many bases are correctly added, which is the different in REF and ALT sequences for the variant
-        // we double everything here to avoid floating-point
-        let ref_alt_dist = 2 * variant.alt_ed()? as u64;
-        // create the metrics, scaling by expected zygosity
-        let var_metrics = SummaryMetrics::new(0, 0, (ev as u64)*ref_alt_dist, 0);
-
-        // add to the variant type
-        let variant_type = variant.variant_type();
-        bench_result.add_basepair_metrics(var_metrics, Some(variant_type));
-    }
-
-    Ok(bench_result)
-}
-
 /// This will compare two sequences and flag any missing or different bases from the truth sequence.
 /// Critically, there is no information indicating if a base is a "variant" or just buffer.
 /// The values returned in the SummaryMetrics are doubled to account for half-correctness.
@@ -775,24 +662,6 @@ fn generate_allele_sequence(
     );
 
     Ok((current_sequence, failed_ed))
-}
-
-/// For a set of zygosities, this will generate a flattened count of the alternate allele.
-/// # Arguments
-/// * `zygosities` - the zygosities
-fn generate_expected_zyg_counts(zygosities: &[PhasedZygosity]) -> Vec<u8> {
-    zygosities.iter()
-        .map(|z| {
-            match *z {
-                PhasedZygosity::Unknown => todo!("handle Unknown zygosity"),
-                PhasedZygosity::HomozygousReference => 0,
-                PhasedZygosity::UnphasedHeterozygous |
-                PhasedZygosity::PhasedHet01 |
-                PhasedZygosity::PhasedHet10 => 1,
-                PhasedZygosity::HomozygousAlternate => 2
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

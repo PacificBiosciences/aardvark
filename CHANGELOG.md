@@ -1,3 +1,11 @@
+# v1.0.0
+## Fixed
+- Patched the `--regions` option to be required by the CLI. Previously, this was not flagged as required by the CLI but would fail when run without the option.
+- Changed an error message when parsing input VCF files to print which VCF path is the source of the error, clarifying previous confusion around the indexing.
+- Aligned the `compare` stratification CLI flag with documentation: the option is now `--stratifications` (plural), with `--stratification` retained as an alias for backwards compatibility
+- Removed unrecommended hidden option and corresponding implementation
+- Updated dependencies to remove known vulnerabilities
+
 # v0.10.5
 ## Fixed
 - Updated dependencies to remove known vulnerabilities

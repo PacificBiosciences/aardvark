@@ -1,6 +1,6 @@
 [package]
 name = "aardvark-bio"
-version = "0.10.5"
+version = "1.0.0"
 authors = ["holtjma <mholt@pacificbiosciences.com>"]
 edition = "2021"
 license = "MIT"

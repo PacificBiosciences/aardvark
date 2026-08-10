@@ -32,7 +32,11 @@ Authors: [Matt Holt](https://github.com/holtjma), [Zev Kronenberg](https://githu
 * [Performance](./docs/performance.md)
 
 ## Citation
-If you use Aardvark, please cite our bioRxiv pre-print:
+If you use Aardvark, please cite our publication:
+
+[Holt, J.M., et al. Aardvark: sifting through differences in a mound of variants. _Genome Biology_ (2026). https://doi.org/10.1186/s13059-026-04165-0](https://doi.org/10.1186/s13059-026-04165-0)
+
+Our original pre-print can also be accessed here:
 
 [Holt, James Matthew, et al. "Aardvark: Sifting through differences in a mound of variants." bioRxiv (2025): 2025-10.](https://doi.org/10.1101/2025.10.03.680257)
 

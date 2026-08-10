@@ -192,7 +192,7 @@ fn run_compare(settings: CompareSettings) {
         &settings.truth_sample,
         &settings.query_vcf_filename,
         &settings.query_sample,
-        settings.regions.as_deref(),
+        &settings.regions,
         &reference_genome,
         settings.min_variant_gap,
         !settings.disable_variant_trimming
@@ -234,7 +234,6 @@ fn run_compare(settings: CompareSettings) {
 
     // build our configuration
     let compare_config = match CompareConfigBuilder::default()
-        .enable_exact_shortcut(settings.enable_exact_shortcut)
         .enable_sequences(region_seq_writer.is_some())
         .max_branch_factor(settings.max_branch_factor)
         .build() {
@@ -393,7 +392,7 @@ fn run_merge(settings: MergeSettings) {
     let mut region_iter = match RegionIterator::new_merge_iterator(
         &settings.vcf_filenames,
         &settings.vcf_samples,
-        settings.merge_regions.as_deref(),
+        &settings.merge_regions,
         &reference_genome,
         settings.min_variant_gap,
         !settings.disable_variant_trimming
