@@ -42,15 +42,17 @@ pub struct CompareSettings {
     pub query_vcf_filename: PathBuf,
 
     /// Confidence regions (BED)
+    #[clap(required = true)]
     #[clap(short = 'b')]
     #[clap(long = "regions")]
     #[clap(value_name = "BED")]
     #[clap(help_heading = Some("Input/Output"))]
-    pub regions: Option<PathBuf>,
+    pub regions: PathBuf,
 
     /// Stratifications, specifically the root file-of-filenames TSV
     #[clap(short = 's')]
-    #[clap(long = "stratification")]
+    #[clap(long = "stratifications")]
+    #[clap(alias = "stratification")]
     #[clap(value_name = "TSV")]
     #[clap(help_heading = Some("Input/Output"))]
     pub stratifications: Option<PathBuf>,
@@ -117,12 +119,6 @@ pub struct CompareSettings {
     #[clap(default_value = "50")]
     pub max_branch_factor: usize,
 
-    /// Enables an exact-match compute shortcut at the cost of variant-level assessment accuracy
-    #[clap(long = "enable-exact-shortcut")]
-    #[clap(help_heading = Some("Compare parameters"))]
-    #[clap(hide = true)] // if you remove this, make sure you re-enable the CLI outputs
-    pub enable_exact_shortcut: bool,
-
     /// Enables the haplotype scoring metrics
     #[clap(long = "enable-haplotype-metrics")]
     #[clap(help_heading = Some("Optional metrics"))]
@@ -178,7 +174,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     check_required_filename(&settings.reference_fn, "Reference FASTA")?;
     check_required_filename(&settings.truth_vcf_filename, "Truth VCF")?;
     check_required_filename(&settings.query_vcf_filename, "Query VCF")?;
-    check_optional_filename(settings.regions.as_deref(), "Regions")?;
+    check_required_filename(&settings.regions, "Regions")?;
     check_optional_filename(settings.stratifications.as_deref(), "Stratifications")?;
     
     // dump stuff to the logger
@@ -193,11 +189,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         settings.query_sample = get_vcf_sample_name(&settings.query_vcf_filename, 0)?;
     }
     info!("\tQuery sample: {:?}", &settings.query_sample);
-    if let Some(hcr_fn) = settings.regions.as_deref() {
-        info!("\tRegions: {hcr_fn:?}");
-    } else {
-        info!("\tRegions: None");
-    }
+    info!("\tRegions: {:?}", &settings.regions);
     if let Some(filename) = settings.stratifications.as_deref() {
         info!("\tStratifications: {filename:?}");
     } else {
@@ -234,9 +226,6 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     info!("Compare parameters:");
     ensure!(settings.max_branch_factor > 0, "--max-branch-factor must be >0");
     info!("\tMax branch factor: {}", settings.max_branch_factor);
-    if settings.enable_exact_shortcut {
-        info!("\tExact match shortcut: {}", if settings.enable_exact_shortcut { "ENABLED" } else { "DISABLED" });
-    }
 
     if settings.threads == 0 {
         settings.threads = 1;

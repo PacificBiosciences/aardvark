@@ -54,7 +54,7 @@ impl RegionIterator {
     /// * `truth_sample` - sample name to read from in the truth VCF
     /// * `query_vcf_fn` - filepath for the query VCF, multiple formats supported
     /// * `query_sample` - sample name to read from in the query VCF
-    /// * `confidence_regions` - filepath for the confidence region, BED expected (Optional)
+    /// * `confidence_regions` - filepath for the confidence region BED file
     /// * `reference_genome` - the pre-loaded reference genome dictionary
     /// * `flank_size` - the window to merge variants
     /// * `enable_trimming` - allows variants to get trimmed, removing extra bases from REF/ALT
@@ -64,7 +64,7 @@ impl RegionIterator {
         truth_sample: &str,
         query_vcf_fn: &Path,
         query_sample: &str,
-        confidence_regions: Option<&Path>,
+        confidence_regions: &Path,
         reference_genome: &ReferenceGenome,
         flank_size: usize,
         enable_trimming: bool
@@ -89,11 +89,7 @@ impl RegionIterator {
         let query_index = query_vcf_header.sample_names().get_index_of(query_sample)
             .ok_or(anyhow!("Sample name {query_sample:?} was not found in {query_vcf_fn:?}"))?;
 
-        let hc_bed_regions = if let Some(cr_fn) = confidence_regions {
-            LoadedBed::preload_bed_file(cr_fn)?
-        } else {
-            bail!("High confidence regions are currently required.");
-        };
+        let hc_bed_regions = LoadedBed::preload_bed_file(confidence_regions)?;
 
         let chrom_lengths = reference_genome.contig_keys().iter()
             .map(|k| (k.clone(), reference_genome.get_full_chromosome(k).len()))
@@ -122,14 +118,14 @@ impl RegionIterator {
     /// # Arguments
     /// * `vcf_filenames` - filepath for the input VCFs, multiple formats supported
     /// * `sample_names` - sample name to read from in the provided VCFs
-    /// * `confidence_regions` - filepath for the confidence region, BED expected (Optional)
+    /// * `confidence_regions` - filepath for the confidence region BED file
     /// * `reference_genome` - the pre-loaded reference genome dictionary
     /// * `flank_size` - the window to merge variants
     /// * `enable_trimming` - allows variants to get trimmed, removing extra bases from REF/ALT
     pub fn new_merge_iterator<P: AsRef<Path> + std::fmt::Debug, S: AsRef<str> + std::fmt::Debug>(
         vcf_filenames: &[P],
         sample_names: &[S],
-        confidence_regions: Option<&Path>,
+        confidence_regions: &Path,
         reference_genome: &ReferenceGenome,
         flank_size: usize,
         enable_trimming: bool
@@ -162,11 +158,7 @@ impl RegionIterator {
             vcf_sample_index.push(si);
         }
 
-        let hc_bed_regions = if let Some(cr_fn) = confidence_regions {
-            LoadedBed::preload_bed_file(cr_fn)?
-        } else {
-            bail!("High confidence regions are currently required.");
-        };
+        let hc_bed_regions = LoadedBed::preload_bed_file(confidence_regions)?;
 
         let chrom_lengths = reference_genome.contig_keys().iter()
             .map(|k| (k.clone(), reference_genome.get_full_chromosome(k).len()))
@@ -259,7 +251,7 @@ impl RegionIterator {
                 // load the variants into memory
                 match load_variants_in_region(
                     &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region, self.enable_trimming
-                ).with_context(|| format!("Error while pre-loading variants from input #{vi} in {full_chrom_region}:")) {
+                ).with_context(|| format!("Error while pre-loading variants from input index {vi} ({vcf_path:?}) in {full_chrom_region}:")) {
                     Ok(v) => Ok(
                         ((vi, chrom_index), v)
                     ),

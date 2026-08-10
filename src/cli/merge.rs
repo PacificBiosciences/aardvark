@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use strum_macros::EnumString;
 
-use crate::cli::core::{check_optional_filename, check_required_filename, AFTER_HELP, FULL_VERSION};
+use crate::cli::core::{check_required_filename, AFTER_HELP, FULL_VERSION};
 use crate::parsing::noodles_helper::get_vcf_sample_name;
 
 #[derive(Clone, Copy, Default, Debug, strum_macros::Display, EnumString, Serialize, clap::ValueEnum)]
@@ -70,11 +70,12 @@ pub struct MergeSettings {
     pub vcf_tags: Vec<String>,
 
     /// Regions to perform the merge (BED)
+    #[clap(required = true)]
     #[clap(short = 'b')]
     #[clap(long = "regions")]
     #[clap(value_name = "BED")]
     #[clap(help_heading = Some("Input/Output"))]
-    pub merge_regions: Option<PathBuf>,
+    pub merge_regions: PathBuf,
 
     /// Output VCF folder
     #[clap(short = 'o')]
@@ -182,12 +183,8 @@ pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<Merge
     // check for all the required input files
     check_required_filename(&settings.reference_fn, "Reference FASTA")?;
     info!("\tReference: {:?}", &settings.reference_fn);
-    check_optional_filename(settings.merge_regions.as_deref(), "Merge regions")?;
-    if let Some(hcr_fn) = settings.merge_regions.as_deref() {
-        info!("\tMerge regions: {hcr_fn:?}");
-    } else {
-        info!("\tMerge regions: None");
-    }
+    check_required_filename(&settings.merge_regions, "Merge regions")?;
+    info!("\tMerge regions: {:?}", &settings.merge_regions);
     
     // check the input VCFs and corresponding metadata
     for (i, i_vcf) in settings.vcf_filenames.iter().enumerate() {
