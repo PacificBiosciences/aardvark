@@ -122,7 +122,7 @@ identical	Snv	2	ont	3134498	0
 ```
 
 ## Debug folder
-The debug folder (`--debug-folder`) contains many files that may be useful for debugging errors from aardvark, or for getting greater details around specific comparisons that were performed.
+The debug folder (`--output-debug`) contains many files that may be useful for debugging errors from aardvark, or for getting greater details around specific comparisons that were performed.
 The following files are currently created when this option is specified:
 
 * `cli_settings.json` - JSON dump of the exact parameters that were used to run Aardvark
