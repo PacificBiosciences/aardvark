@@ -32,6 +32,6 @@ See the [record basepair description](./methods.md#record-basepair) for more det
 ```
 aardvark compare \
     --min-variant-gap 1000 \
-    --enable-record-basepair \
+    --enable-record-basepair-metrics \
     ...
 ```

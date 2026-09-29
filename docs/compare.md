@@ -122,7 +122,7 @@ chr1	801142	.	A	T	.	.	.	GT:BD:EA:OA:RI	1/1:TP:2:2:7
 ```
 
 ## Debug folder
-The debug folder (`--debug-folder`) contains many files that may be useful for debugging errors from aardvark, or for getting greater details around specific comparisons that were performed.
+The debug folder (`--output-debug`) contains many files that may be useful for debugging errors from aardvark, or for getting greater details around specific comparisons that were performed.
 The following files are currently created when this option is specified:
 
 * `cli_settings.json` - JSON dump of the exact parameters that were used to run Aardvark
