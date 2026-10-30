@@ -36,6 +36,7 @@ Required parameters:
 ## Additional options
 * `--threads <THREADS>` - The number of compute threads to use for the comparison step
 * `--output-debug <DIR>` - Creates a [debug folder](#debug-folder) and populates it with more detailed statistics from the comparison
+* `--soft-max-variant-length <BP>` and `--hard-max-variant-length <BP>` - Optional length band applied to both the truth and query VCFs. These must be set together, with `0 < soft max <= hard max <= 10000`. Alleles above the soft max are included only when they improve the comparison. Alleles above the hard max are ignored.
 * `--truth-sample <SAMPLE>` and `--query-sample <SAMPLE>` - Allows for the specification of the truth or query sample name in the provided VCF. This is usually only needed when they are multi-sample VCFs.
 * `--stratifications` - The root TSV file for a stratification. See [stratifications](#stratifications) for details.
 

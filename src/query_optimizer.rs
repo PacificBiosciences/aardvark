@@ -65,13 +65,13 @@ use crate::dwfa::haplotype_dwfa::HaplotypeDWFA;
 /// Result from our query optimization routine
 #[derive(Clone, Debug)]
 pub struct OptimizedHaplotypes {
-    /// Finalize zygosity of truth, forcing unphased into a phase
+    /// Final zygosity of truth, aligned with the input variants. `Excluded` was left out.
     truth_zygosity: Vec<PhasedZygosity>,
     /// Truth sequence 1, generally expected to be phased as provided
     truth_seq1: Vec<u8>,
     /// Truth sequence 2
     truth_seq2: Vec<u8>,
-    /// Final zygosity of observations, forcing unphased into a phase
+    /// Final zygosity of query, aligned with the input variants. `Excluded` was left out.
     query_zygosity: Vec<PhasedZygosity>,
     /// Query sequence 1, this combined with query sequence 2 should be the closest phased match to the truth haplotypes
     query_seq1: Vec<u8>,
@@ -149,6 +149,8 @@ impl OptimizedHaplotypes {
 
 /// Given two sets of variants, this will determine the best orientations of both truth and query variants that minimizes the combined edit distance.
 /// Truth variant phases are respected, whereas query is allowed to be changed (i.e., treated as an "error").
+/// Variants marked optional are applied only when that choice strictly lowers the edit distance.
+/// Otherwise the zygosity entry is `PhasedZygosity::Excluded`.
 /// The method generates four sequences with two phase zygosities sets.
 /// If two heterozygous query variants are incompatible, then they are forced onto separate haplotypes.
 /// # Arguments
@@ -193,6 +195,7 @@ pub fn optimize_sequences(
 
     // set our best to max ED with no result
     let mut best_ed = usize::MAX;
+    let mut best_optional_included = usize::MAX;
     let mut best_results = vec![];
 
     // this tracks how many nodes of length L are encountered, and ignores any beyond our heuristic cutoff
@@ -230,11 +233,15 @@ pub fn optimize_sequences(
             final_node.finalize_dwfas(reference, coordinates.end() as usize)?;
 
             // if our cost is less, this is a better solution
+            // equal cost keeps the solution that includes fewer optional alleles
             let final_cost = final_node.total_cost();
-            match final_cost.cmp(&best_ed) {
+            let optional_included = included_optional_count(truth_variants, final_node.hap_dwfa1().truth_haplotype().alleles())
+                + included_optional_count(query_variants, final_node.hap_dwfa1().query_haplotype().alleles());
+            match final_cost.cmp(&best_ed).then(optional_included.cmp(&best_optional_included)) {
                 std::cmp::Ordering::Less => {
-                    // this cost is strictly better
+                    // lower edit distance, or the same distance with fewer optional alleles
                     best_ed = final_cost;
+                    best_optional_included = optional_included;
                     best_results = vec![final_node];
                 },
                 std::cmp::Ordering::Equal => {
@@ -264,67 +271,58 @@ pub fn optimize_sequences(
         };
         let sync_extension = Some(next_var_pos);
 
-        // get that variant and zygosity
+        // alleles to try for this variant; optional alleles also get an omit branch
+        let mut extensions: Vec<(Allele, Allele)> = Vec::with_capacity(3);
         if current_zyg.is_heterozygous() {
             if !is_truth || current_zyg == PhasedZygosity::UnphasedHeterozygous {
                 // if it is unphased OR it is a query variant (phase can be wrong), we have to consider both phase orientations
-                // heterozygous, try both orientations
-                let extensions = [
-                    (Allele::Reference, Allele::Alternate), // 0|1
-                    (Allele::Alternate, Allele::Reference) // 1|0
-                ];
-
-                // try each extension
-                for (allele1, allele2) in extensions.into_iter() {
-                    // copy our node and update the ID
-                    let mut new_node = current_node.clone();
-                    new_node.set_node_id(next_node_id);
-                    next_node_id += 1;
-
-                    // try to extend it
-                    new_node.extend_variant(
-                        reference, is_truth,
-                        current_variant, allele1, allele2, sync_extension
-                    )?;
-
-                    // we used to check for compatibility, but there is an implicit cost for incompatible now
-                    let new_priority = new_node.priority();
-                    pqueue.push(new_node, new_priority);
-                }
+                extensions.push((Allele::Reference, Allele::Alternate)); // 0|1
+                extensions.push((Allele::Alternate, Allele::Reference)); // 1|0
             } else {
                 // phase is fixed here, figure out which way it is and then just do that one
-                let (a1, a2) = match current_zyg {
+                let pair = match current_zyg {
                     PhasedZygosity::PhasedHet01 => (Allele::Reference, Allele::Alternate),
                     PhasedZygosity::PhasedHet10 => (Allele::Alternate, Allele::Reference),
                     _ => panic!("should not happen")
                 };
-
-                // hom alt, we only have one orientation to add
-                let mut new_node = current_node;
-
-                // no need to update node ID here since we are not cloning; and compatibility from extension is irrelevant
-                new_node.extend_variant(
-                    reference, is_truth,
-                    current_variant, a1, a2, sync_extension
-                )?;
-                let new_priority = new_node.priority();
-                pqueue.push(new_node, new_priority);
+                extensions.push(pair);
             }
         } else {
             // if it's not het, the only other valid kind is hom-alt
             assert_eq!(current_zyg, PhasedZygosity::HomozygousAlternate);
+            extensions.push((Allele::Alternate, Allele::Alternate));
+        }
 
-            // hom alt, we only have one orientation to add
+        // all optional alleles get an exclude branch
+        if current_variant.is_optional() {
+            // leave the allele out entirely; this is not a reference call
+            extensions.push((Allele::Excluded, Allele::Excluded));
+        }
+
+        // if there is only one extension, we can just extend in place
+        if extensions.len() == 1 {
+            let (allele1, allele2) = extensions[0];
             let mut new_node = current_node;
-
-            // no need to update node ID here since we are not cloning; and compatibility from extension is irrelevant
             new_node.extend_variant(
-                reference, is_truth, 
-                current_variant, Allele::Alternate, Allele::Alternate, sync_extension
+                reference, is_truth,
+                current_variant, allele1, allele2, sync_extension
             )?;
             let new_priority = new_node.priority();
             pqueue.push(new_node, new_priority);
-        };
+        } else {
+            // multiple extension, so we need to create new nodes for each
+            for (allele1, allele2) in extensions {
+                let mut new_node = current_node.clone();
+                new_node.set_node_id(next_node_id);
+                next_node_id += 1;
+                new_node.extend_variant(
+                    reference, is_truth,
+                    current_variant, allele1, allele2, sync_extension
+                )?;
+                let new_priority = new_node.priority();
+                pqueue.push(new_node, new_priority);
+            }
+        }
     }
     debug!("Best ED: {best_ed}");
 
@@ -391,14 +389,23 @@ fn convert_alleles_to_zygosity(alleles1: &[Allele], alleles2: &[Allele]) -> Vec<
         .zip(alleles2.iter())
         .map(|(a1, a2)| {
             match (a1, a2) {
-                // these are the only three would _should_ hit at this point in the program
+                // these are the only combinations we should hit at this point in the program
                 (Allele::Reference, Allele::Alternate) => PhasedZygosity::PhasedHet01,
                 (Allele::Alternate, Allele::Reference) => PhasedZygosity::PhasedHet10,
                 (Allele::Alternate, Allele::Alternate) => PhasedZygosity::HomozygousAlternate,
+                (Allele::Excluded, Allele::Excluded) => PhasedZygosity::Excluded,
                 _ => panic!("no impl")
             }
         })
         .collect()
+}
+
+/// Counts optional variants that were applied rather than excluded.
+fn included_optional_count(variants: &[Variant], alleles: &[Allele]) -> usize {
+    variants.iter()
+        .zip(alleles.iter())
+        .filter(|(variant, allele)| variant.is_optional() && **allele != Allele::Excluded)
+        .count()
 }
 
 /// Tracks the current haplotypes in our branch-and-bound exploration of the query space
@@ -662,5 +669,131 @@ mod tests {
         assert_eq!(query_sequences.query_vs1(), 1);
         assert_eq!(query_sequences.query_vs2(), 1);
         assert_eq!(query_sequences.query_zygosity(), &truth_zygosity); // but the zygosity is preserved
+    }
+
+    /// Two short deletions that together match one longer indel.
+    /// The long allele is optional and must be kept because it drives edit distance to zero.
+    fn split_deletion_fixture() -> (Vec<u8>, Vec<Variant>, Variant) {
+        let mut reference = Vec::new();
+        reference.extend_from_slice(b"AAAA");
+        reference.extend(std::iter::repeat_n(b'C', 25));
+        reference.push(b'T');
+        reference.extend(std::iter::repeat_n(b'G', 26));
+        reference.extend_from_slice(b"AAAA");
+
+        let short1 = Variant::new_deletion(0, 3, reference[3..29].to_vec(), reference[3..4].to_vec()).unwrap();
+        let short2 = Variant::new_deletion(0, 29, reference[29..56].to_vec(), reference[29..30].to_vec()).unwrap();
+        let mut long = Variant::new_indel(0, 3, reference[3..56].to_vec(), b"AT".to_vec()).unwrap();
+        long.set_optional();
+        assert_eq!(short1.alt_ed().unwrap(), 25);
+        assert_eq!(short2.alt_ed().unwrap(), 26);
+        assert_eq!(long.alt_ed().unwrap(), 51);
+        (reference, vec![short1, short2], long)
+    }
+
+    /// An optional long query allele that reproduces two required truth deletions is kept and drives edit distance to zero.
+    #[test]
+    fn test_optional_long_query_matches_two_short_truth() {
+        let (reference, shorts, long) = split_deletion_fixture();
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let zyg = vec![PhasedZygosity::HomozygousAlternate, PhasedZygosity::HomozygousAlternate];
+        let result = optimize_sequences(
+            &reference, &coordinates, &shorts, &zyg, &[long], &[PhasedZygosity::HomozygousAlternate], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        assert_eq!(result.ed1() + result.ed2(), 0);
+        assert_eq!(result.query_zygosity(), &[PhasedZygosity::HomozygousAlternate]);
+        assert_eq!(result.truth_zygosity(), &zyg);
+        assert_eq!(result.query_seq1(), result.truth_seq1());
+    }
+
+    /// An optional long truth allele that reproduces two required query deletions is kept and drives edit distance to zero.
+    #[test]
+    fn test_optional_long_truth_matches_two_short_query() {
+        let (reference, shorts, long) = split_deletion_fixture();
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let short_zyg = vec![PhasedZygosity::HomozygousAlternate, PhasedZygosity::HomozygousAlternate];
+        let result = optimize_sequences(
+            &reference, &coordinates, &[long], &[PhasedZygosity::HomozygousAlternate], &shorts, &short_zyg, MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        assert_eq!(result.ed1() + result.ed2(), 0);
+        assert_eq!(result.truth_zygosity(), &[PhasedZygosity::HomozygousAlternate]);
+        assert_eq!(result.query_zygosity(), &short_zyg);
+        assert_eq!(result.query_seq1(), result.truth_seq1());
+    }
+
+    /// An optional query allele with no truth counterpart is left out, so the edit distance stays zero.
+    #[test]
+    fn test_optional_unmatched_query_is_omitted() {
+        let reference = b"ACGTACGTACGTACGTACGT";
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let mut alt = b"A".to_vec();
+        alt.extend(std::iter::repeat_n(b'N', 80));
+        let mut insertion = Variant::new_insertion(0, 0, b"A".to_vec(), alt).unwrap();
+        insertion.set_optional();
+        let result = optimize_sequences(
+            reference, &coordinates, &[], &[], &[insertion], &[PhasedZygosity::HomozygousAlternate], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        assert_eq!(result.ed1() + result.ed2(), 0);
+        assert_eq!(result.query_zygosity(), &[PhasedZygosity::Excluded]);
+        assert_eq!(result.query_seq1(), reference);
+    }
+
+    /// A required query allele with no truth counterpart stays in the comparison and adds edit distance.
+    #[test]
+    fn test_required_unmatched_query_is_kept() {
+        let reference = b"ACGTACGTACGTACGTACGT";
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let mut alt = b"C".to_vec();
+        alt.extend(std::iter::repeat_n(b'N', 10));
+        let insertion = Variant::new_insertion(0, 1, b"C".to_vec(), alt).unwrap();
+        let result = optimize_sequences(
+            reference, &coordinates, &[], &[], &[insertion], &[PhasedZygosity::HomozygousAlternate], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        assert!(result.ed1() + result.ed2() > 0);
+        assert_eq!(result.query_zygosity(), &[PhasedZygosity::HomozygousAlternate]);
+    }
+
+    /// An optional query allele that only partially covers a required truth allele is left out.
+    #[test]
+    fn test_optional_partial_overlap_is_omitted() {
+        let (reference, shorts, _) = split_deletion_fixture();
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let truth = vec![shorts[0].clone()];
+        let truth_zyg = vec![PhasedZygosity::HomozygousAlternate];
+        let mut partial = Variant::new_deletion(0, 3, reference[3..55].to_vec(), reference[3..4].to_vec()).unwrap();
+        partial.set_optional();
+        assert_eq!(partial.alt_ed().unwrap(), 51);
+
+        let with_optional = optimize_sequences(
+            &reference, &coordinates, &truth, &truth_zyg, &[partial], &[PhasedZygosity::HomozygousAlternate], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        let truth_only = optimize_sequences(
+            &reference, &coordinates, &truth, &truth_zyg, &[], &[], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        assert_eq!(with_optional.query_zygosity(), &[PhasedZygosity::Excluded]);
+        assert_eq!(with_optional.ed1(), truth_only.ed1());
+        assert_eq!(with_optional.ed2(), truth_only.ed2());
+    }
+
+    /// An optional query allele that fixes two truth deletions but leaves a separate truth SNV is kept, and the edit distance falls without reaching zero.
+    #[test]
+    fn test_optional_improvement_is_not_exact() {
+        let (reference, shorts, long) = split_deletion_fixture();
+        let coordinates = Coordinates::new("chrom".to_string(), 0, reference.len() as u64);
+        let snv = Variant::new_snv(0, 57, b"A".to_vec(), b"G".to_vec()).unwrap();
+        let mut truth = shorts;
+        truth.push(snv);
+        let truth_zyg = vec![PhasedZygosity::HomozygousAlternate; 3];
+
+        let with_optional = optimize_sequences(
+            &reference, &coordinates, &truth, &truth_zyg, &[long], &[PhasedZygosity::HomozygousAlternate], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+        let truth_only = optimize_sequences(
+            &reference, &coordinates, &truth, &truth_zyg, &[], &[], MAX_BRANCH_FACTOR_TEST
+        ).unwrap()[0].clone();
+
+        assert_eq!(with_optional.query_zygosity(), &[PhasedZygosity::HomozygousAlternate]);
+        assert!(with_optional.ed1() + with_optional.ed2() > 0);
+        assert!(with_optional.ed1() + with_optional.ed2() < truth_only.ed1() + truth_only.ed2());
     }
 }

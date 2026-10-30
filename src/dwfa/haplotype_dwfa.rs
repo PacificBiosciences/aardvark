@@ -180,8 +180,9 @@ impl HaplotypeTracker {
         // extend hap1 by the corresponding allele
         let success = match allele {
             Allele::Unknown => return Err(HapDWFAError::UnknownAllele),
-            Allele::Reference => {
-                // reference allele, so nothing to add
+            Allele::Reference |
+            Allele::Excluded => {
+                // reference, or an optional allele left out of the sequence: nothing to add
                 true
             },
             Allele::Alternate => {

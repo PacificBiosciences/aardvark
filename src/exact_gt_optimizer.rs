@@ -254,14 +254,15 @@ pub fn optimize_gt_alleles(
 
         match current_allele {
             Allele::Unknown => bail!("Allele::Unknown is not supported"),
+            Allele::Excluded |
             Allele::Reference => {
-                // REF allele only, so just extend by that
+                // one allele and no ALT flip, so extend in place without cloning
                 let mut new_node = current_node;
 
                 // no need to update node ID here since we are not cloning; and compatibility from extension is irrelevant
                 let success = new_node.extend_variant(
-                    reference, is_truth, 
-                    current_variant, Allele::Reference, sync_extension, false
+                    reference, is_truth,
+                    current_variant, current_allele, sync_extension, false
                 )?;
                 
                 if success && new_node.is_exact_match() {
@@ -325,8 +326,8 @@ pub fn optimize_gt_alleles(
                         Allele::Reference
                     };
 
-                    // only keep the ones that are Reference; i.e. we have "failed" the other
-                    allele == Allele::Reference
+                    // only keep Reference, or an Excluded allele that was never a candidate
+                    allele == Allele::Reference || allele == Allele::Excluded
                 }).collect();
 
             // debug messaging

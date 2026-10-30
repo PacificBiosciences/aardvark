@@ -87,7 +87,9 @@ pub struct Variant {
 
     // auxiliary booleans
     /// if true, flags this as a variant to ignore for _some_ reason
-    is_ignored: bool
+    is_ignored: bool,
+    /// if true, this allele is between the soft max and hard max lengths and may be omitted
+    optional: bool
 }
 
 impl Variant {
@@ -117,7 +119,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -149,7 +152,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -180,7 +184,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -215,7 +220,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -248,7 +254,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -280,7 +287,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -315,7 +323,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -350,7 +359,8 @@ impl Variant {
             allele0,
             allele1,
             raw_allele_space,
-            is_ignored: false
+            is_ignored: false,
+            optional: false
         })
     }
 
@@ -372,6 +382,11 @@ impl Variant {
     /// Sets the variant to be ignored
     pub fn set_ignored(&mut self) {
         self.is_ignored = true;
+    }
+
+    /// Marks this variant as optional. Optional variants are included only when they reduce edit distance.
+    pub fn set_optional(&mut self) {
+        self.optional = true;
     }
 
     /// This will determine the best matching allele (0 or 1) or return 2 if neither match.
@@ -445,6 +460,10 @@ impl Variant {
 
     pub fn is_ignored(&self) -> bool {
         self.is_ignored
+    }
+
+    pub fn is_optional(&self) -> bool {
+        self.optional
     }
 }
 

@@ -229,6 +229,9 @@ impl VariantMerger {
         let merge_reason = record_buf::info::field::Value::from(merge_reason);
 
         for (variant, &zygosity) in variants.iter().zip(zygosity.iter()) {
+            if zygosity == PhasedZygosity::Excluded {
+                continue;
+            }
             // convert REF and ALT back into strings
             let ref_allele = std::str::from_utf8(variant.allele0())?;
             let alternate_bases = record_buf::AlternateBases::from(
@@ -248,6 +251,7 @@ impl VariantMerger {
                 PhasedZygosity::PhasedHet01 => "0|1",
                 PhasedZygosity::PhasedHet10 => "1|0",
                 PhasedZygosity::HomozygousAlternate => "1/1",
+                PhasedZygosity::Excluded => bail!("PhasedZygosity::Excluded cannot be written"),
             };
 
             // anything going into the final record has a key-value pair for the FORMAT tag

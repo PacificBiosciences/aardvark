@@ -23,7 +23,10 @@ pub enum MetricsType {
     Basepair,
     /// Record-basepair-level metrics
     #[serde(rename="RECORD_BP")]
-    RecordBasepair
+    RecordBasepair,
+    /// Homopolymer-compressed basepair-level metrics
+    #[serde(rename="HPC_BASEPAIR")]
+    HpcBasepair,
 }
 
 /// Stores metrics for a given region.
@@ -107,6 +110,20 @@ impl GroupTypeMetrics {
         }
     }
 
+    /// Adds homopolymer-compressed basepair metrics to the current tracking
+    /// # Arguments
+    /// * `hpc_basepair_metrics` - the metrics to get added into the current values
+    /// * `variant_type` - optional variant type these stats are added to; if none, it goes into the "All" grouping
+    pub fn add_hpc_basepair_metrics(&mut self, hpc_basepair_metrics: SummaryMetrics, variant_type: Option<VariantType>) {
+        if let Some(vt) = variant_type {
+            let v_metrics = self.variant_metrics.entry(vt).or_default();
+            v_metrics.add_hpc_basepair_metrics(hpc_basepair_metrics);
+        } else {
+            // all variant category
+            self.joint_metrics.add_hpc_basepair_metrics(hpc_basepair_metrics);
+        }
+    }
+
     /// Sets the values for a reverse benchmark. This is primarily to set query_tp and query_fp values from a reverse comparison.
     /// # Arguments
     /// * `other` - Results from a benchmark where truth and query have been swapped.
@@ -157,7 +174,9 @@ pub struct GroupMetrics {
     /// Stores alignment-level summary metrics (basepairs)
     basepair: SummaryMetrics,
     /// Stores record-basepair summary metrics ("raw" basepairs)
-    record_bp: SummaryMetrics
+    record_bp: SummaryMetrics,
+    /// Stores homopolymer-compressed basepair summary metrics
+    hpc_basepair: SummaryMetrics,
 }
 
 impl GroupMetrics {
@@ -168,10 +187,11 @@ impl GroupMetrics {
         hap: SummaryMetrics,
         weighted_hap: SummaryMetrics,
         basepair: SummaryMetrics,
-        record_bp: SummaryMetrics
+        record_bp: SummaryMetrics,
+        hpc_basepair: SummaryMetrics,
     ) -> Self {
         Self {
-            gt, hap, weighted_hap, basepair, record_bp
+            gt, hap, weighted_hap, basepair, record_bp, hpc_basepair
         }
     }
 
@@ -262,6 +282,13 @@ impl GroupMetrics {
         self.record_bp += record_bp_metrics;
     }
 
+    /// Adds homopolymer-compressed basepair metrics to the current tracking
+    /// # Arguments
+    /// * `hpc_basepair_metrics` - the metrics to get added into the current values
+    pub fn add_hpc_basepair_metrics(&mut self, hpc_basepair_metrics: SummaryMetrics) {
+        self.hpc_basepair += hpc_basepair_metrics;
+    }
+
     /// Sets the values for a reverse benchmark. This is primarily to set query_tp and query_fp values from a reverse comparison.
     /// # Arguments
     /// * `other` - Results from a benchmark where truth and query have been swapped.
@@ -286,6 +313,7 @@ impl GroupMetrics {
             MetricsType::WeightedHaplotype => &self.weighted_hap,
             MetricsType::Basepair => &self.basepair,
             MetricsType::RecordBasepair => &self.record_bp,
+            MetricsType::HpcBasepair => &self.hpc_basepair,
         }
     }
 
@@ -309,6 +337,10 @@ impl GroupMetrics {
     pub fn record_bp(&self) -> &SummaryMetrics {
         &self.record_bp
     }
+
+    pub fn hpc_basepair(&self) -> &SummaryMetrics {
+        &self.hpc_basepair
+    }
 }
 
 impl AddAssign<Self> for GroupMetrics {
@@ -326,6 +358,7 @@ impl AddAssign<&Self> for GroupMetrics {
         self.weighted_hap += rhs.weighted_hap;
         self.basepair += rhs.basepair;
         self.record_bp += rhs.record_bp;
+        self.hpc_basepair += rhs.hpc_basepair;
     }
 }
 
@@ -341,6 +374,7 @@ mod tests {
             SummaryMetrics::new(3, 2, 1, 2),
             SummaryMetrics::new(3, 0, 1, 4),
             SummaryMetrics::new(4, 0, 2, 4),
+            SummaryMetrics::new(2, 0, 1, 2),
         );
         let g2 = GroupMetrics::new(
             SummaryGtMetrics::new(1, 2, 3, 4, 1, 0),
@@ -348,6 +382,7 @@ mod tests {
             SummaryMetrics::new(0, 1, 0, 2),
             SummaryMetrics::new(0, 1, 0, 2),
             SummaryMetrics::new(1, 1, 1, 2),
+            SummaryMetrics::new(0, 1, 0, 1),
         );
 
         let expected_sum = GroupMetrics::new(
@@ -356,6 +391,7 @@ mod tests {
             SummaryMetrics::new(3, 3, 1, 4),
             SummaryMetrics::new(3, 1, 1, 6),
             SummaryMetrics::new(5, 1, 3, 6),
+            SummaryMetrics::new(2, 1, 1, 3),
         );
 
         // now add and test
@@ -403,6 +439,13 @@ mod tests {
         let mut group_metrics = GroupMetrics::default();
         group_metrics.add_record_bp_metrics(SummaryMetrics::new(1, 2, 3, 4));
         assert_eq!(group_metrics.record_bp, SummaryMetrics::new(1, 2, 3, 4));
+    }
+
+    #[test]
+    fn test_add_hpc_basepair_metrics() {
+        let mut group_metrics = GroupMetrics::default();
+        group_metrics.add_hpc_basepair_metrics(SummaryMetrics::new(1, 2, 3, 4));
+        assert_eq!(group_metrics.hpc_basepair, SummaryMetrics::new(1, 2, 3, 4));
     }
 
     #[test]
@@ -486,7 +529,7 @@ mod tests {
         let variant_type = VariantType::Snv;
         let basepair_metrics = SummaryMetrics::new(10, 5, 3, 2);
 
-        group_type_metrics.add_basepair_metrics(basepair_metrics.clone(), Some(variant_type));
+        group_type_metrics.add_basepair_metrics(basepair_metrics, Some(variant_type));
 
         // Check that variant-specific metrics were created and updated
         let variant_metrics = group_type_metrics.variant_metrics();
@@ -505,7 +548,7 @@ mod tests {
         let mut group_type_metrics = GroupTypeMetrics::default();
         let basepair_metrics = SummaryMetrics::new(10, 5, 3, 2);
 
-        group_type_metrics.add_basepair_metrics(basepair_metrics.clone(), None);
+        group_type_metrics.add_basepair_metrics(basepair_metrics, None);
 
         // Check that joint metrics were updated
         let joint = group_type_metrics.joint_metrics();
@@ -521,7 +564,7 @@ mod tests {
         let variant_type = VariantType::Insertion;
         let record_bp_metrics = SummaryMetrics::new(15, 7, 4, 1);
 
-        group_type_metrics.add_record_bp_metrics(record_bp_metrics.clone(), Some(variant_type));
+        group_type_metrics.add_record_bp_metrics(record_bp_metrics, Some(variant_type));
 
         // Check that variant-specific metrics were created and updated
         let variant_metrics = group_type_metrics.variant_metrics();
@@ -540,7 +583,7 @@ mod tests {
         let mut group_type_metrics = GroupTypeMetrics::default();
         let record_bp_metrics = SummaryMetrics::new(15, 7, 4, 1);
 
-        group_type_metrics.add_record_bp_metrics(record_bp_metrics.clone(), None);
+        group_type_metrics.add_record_bp_metrics(record_bp_metrics, None);
 
         // Check that joint metrics were updated
         let joint = group_type_metrics.joint_metrics();

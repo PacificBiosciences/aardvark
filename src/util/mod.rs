@@ -7,5 +7,7 @@ Contains generic utility functions that are not particularly specific to aardvar
 pub mod json_io;
 /// Helper functions for generating the progress bars
 pub mod progress_bar;
+/// Helper functions for sequence manipulation
+pub mod sequence;
 /// Functions for basic sequence alignment scoring
 pub mod sequence_alignment;

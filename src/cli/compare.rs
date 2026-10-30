@@ -1,5 +1,5 @@
 
-use anyhow::ensure;
+use anyhow::{bail, ensure};
 use clap::Args;
 use log::info;
 use serde::Serialize;
@@ -99,6 +99,20 @@ pub struct CompareSettings {
     #[clap(default_value = "50")]
     pub min_variant_gap: usize,
 
+    /// Event length above which an allele is included only when it improves the comparison.
+    /// Alleles at or below this length are always scored. Must be set with --hard-max-variant-length.
+    #[clap(long = "soft-max-variant-length")]
+    #[clap(value_name = "BP")]
+    #[clap(help_heading = Some("Region generation"))]
+    pub soft_max_variant_length: Option<usize>,
+
+    /// Event length above which an allele is dropped.
+    /// Alleles between --soft-max-variant-length and this length are optional.
+    #[clap(long = "hard-max-variant-length")]
+    #[clap(value_name = "BP")]
+    #[clap(help_heading = Some("Region generation"))]
+    pub hard_max_variant_length: Option<usize>,
+
     /// Disables variant trimming, which may have a negative impact on accuracy
     #[clap(long = "disable-variant-trimming")]
     #[clap(help_heading = Some("Region generation"))]
@@ -137,6 +151,12 @@ pub struct CompareSettings {
     #[clap(default_value = "false")]
     pub enable_record_basepair_scoring: bool,
 
+    /// Enables homopolymer-compressed basepair scoring metrics
+    #[clap(long = "enable-hpc-basepair-metrics")]
+    #[clap(help_heading = Some("Optional metrics"))]
+    #[clap(default_value = "false")]
+    pub enable_hpc_basepair_scoring: bool,
+
     /// Number of threads to use in the benchmarking step
     #[clap(long = "threads")]
     #[clap(value_name = "THREADS")]
@@ -166,7 +186,7 @@ pub struct CompareSettings {
 pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<CompareSettings> {
     // hard code the version in
     settings.aardvark_version = FULL_VERSION.clone();
-    info!("Aardvark version: {:?}", &settings.aardvark_version);
+    info!("Aardvark version: {:?}", settings.aardvark_version);
     info!("Sub-command: compare");
     info!("Inputs:");
 
@@ -178,18 +198,18 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     check_optional_filename(settings.stratifications.as_deref(), "Stratifications")?;
     
     // dump stuff to the logger
-    info!("\tReference: {:?}", &settings.reference_fn);
-    info!("\tTruth VCF: {:?}", &settings.truth_vcf_filename);
+    info!("\tReference: {:?}", settings.reference_fn);
+    info!("\tTruth VCF: {:?}", settings.truth_vcf_filename);
     if settings.truth_sample.is_empty() {
         settings.truth_sample = get_vcf_sample_name(&settings.truth_vcf_filename, 0)?;
     }
-    info!("\tTruth sample: {:?}", &settings.truth_sample);
-    info!("\tQuery VCF: {:?}", &settings.query_vcf_filename);
+    info!("\tTruth sample: {:?}", settings.truth_sample);
+    info!("\tQuery VCF: {:?}", settings.query_vcf_filename);
     if settings.query_sample.is_empty() {
         settings.query_sample = get_vcf_sample_name(&settings.query_vcf_filename, 0)?;
     }
-    info!("\tQuery sample: {:?}", &settings.query_sample);
-    info!("\tRegions: {:?}", &settings.regions);
+    info!("\tQuery sample: {:?}", settings.query_sample);
+    info!("\tRegions: {:?}", settings.regions);
     if let Some(filename) = settings.stratifications.as_deref() {
         info!("\tStratifications: {filename:?}");
     } else {
@@ -197,11 +217,12 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     }
 
     // check for the haplotype scoring metrics
-    if settings.enable_haplotype_scoring || settings.enable_weighted_haplotype_scoring || settings.enable_record_basepair_scoring {
+    if settings.enable_haplotype_scoring || settings.enable_weighted_haplotype_scoring || settings.enable_record_basepair_scoring || settings.enable_hpc_basepair_scoring {
         info!("Optional metrics:");
         info!("\tHaplotype scoring: {}", if settings.enable_haplotype_scoring { "ENABLED" } else { "DISABLED" });
         info!("\tWeighted haplotype scoring: {}", if settings.enable_weighted_haplotype_scoring { "ENABLED" } else { "DISABLED" });
         info!("\tRecord-basepair scoring: {}", if settings.enable_record_basepair_scoring { "ENABLED" } else { "DISABLED" });
+        info!("\tHPC-basepair scoring: {}", if settings.enable_hpc_basepair_scoring { "ENABLED" } else { "DISABLED" });
     }
 
     // 0 is just a sentinel for everything
@@ -211,8 +232,8 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     
     // outputs
     info!("Outputs:");
-    info!("\tCompare label: {:?}", &settings.compare_label);
-    info!("\tOutput folder: {:?}", &settings.output_folder);
+    info!("\tCompare label: {:?}", settings.compare_label);
+    info!("\tOutput folder: {:?}", settings.output_folder);
     if let Some(debug_folder) = settings.debug_folder.as_ref() {
         info!("\tDebug folder: {debug_folder:?}");
     }
@@ -222,6 +243,19 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
     ensure!(settings.min_variant_gap > 0, "--min-variant-gap must be >0");
     info!("\tMinimum variant gap: {}", settings.min_variant_gap);
     info!("\tVariant trimming: {}", if settings.disable_variant_trimming { "DISABLED "} else { "ENABLED" });
+    match (settings.soft_max_variant_length, settings.hard_max_variant_length) {
+        (None, None) => {
+            info!("\tVariant length band: disabled");
+        },
+        (Some(soft_max), Some(hard_max)) => {
+            ensure!(soft_max > 0, "--soft-max-variant-length must be > 0");
+            ensure!(soft_max <= hard_max, "--soft-max-variant-length must be <= --hard-max-variant-length");
+            ensure!(hard_max <= 10000, "--hard-max-variant-length must be <= 10000");
+            info!("\tSoft max variant length: {soft_max}");
+            info!("\tHard max variant length: {hard_max}");
+        },
+        _ => bail!("--soft-max-variant-length and --hard-max-variant-length must be set together"),
+    }
 
     info!("Compare parameters:");
     ensure!(settings.max_branch_factor > 0, "--max-branch-factor must be >0");

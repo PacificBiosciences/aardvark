@@ -18,7 +18,10 @@ pub enum Classification {
     #[strum(serialize = "FN")]
     FalseNegative,
     #[strum(serialize = "FP")]
-    FalsePositive
+    FalsePositive,
+    /// Optional allele that was left out of the comparison
+    #[strum(serialize = "EXCLUDED")]
+    Excluded
 }
 
 /// Collects variant-level assignments based on the GT comparison
@@ -70,6 +73,18 @@ impl VariantMetrics {
         })
     }
 
+    /// Metrics for an optional allele that was left out of the comparison.
+    /// # Arguments
+    /// * `source` - the variant source VCF
+    pub fn excluded(source: VariantSource) -> Self {
+        Self {
+            source,
+            classification: Classification::Excluded,
+            expected_allele_count: 0,
+            observed_allele_count: 0
+        }
+    }
+
     /// Given a previous set of VariantMetrics, this will convert the orientation of the comparison.
     /// Source is toggled, classifications are adjusted (FP <=> FN), and expected/observed counts are swapped.
     /// # Arguments
@@ -85,7 +100,8 @@ impl VariantMetrics {
             Classification::TruePositive => Classification::TruePositive,
             // these two switch
             Classification::FalseNegative => Classification::FalsePositive,
-            Classification::FalsePositive => Classification::FalseNegative
+            Classification::FalsePositive => Classification::FalseNegative,
+            Classification::Excluded => Classification::Excluded
         };
 
         // swap these
@@ -135,5 +151,11 @@ mod tests {
         // toggling again should get the original back
         let double_toggled = VariantMetrics::toggle_source(&toggled);
         assert_eq!(double_toggled, original);
+
+        // Excluded stays excluded when the comparison is swapped from truth to query.
+        let excluded = VariantMetrics::excluded(VariantSource::Truth);
+        let toggled_excluded = VariantMetrics::toggle_source(&excluded);
+        assert_eq!(toggled_excluded, VariantMetrics::excluded(VariantSource::Query));
+        assert_eq!(toggled_excluded.classification(), Classification::Excluded);
     }
 }

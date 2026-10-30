@@ -39,6 +39,9 @@ pub struct RegionIterator {
     flank_size: usize,
     /// Allows variants to get trimmed, removing extra bases from REF/ALT
     enable_trimming: bool,
+    /// When set, (soft_max, hard_max) event-length thresholds. Alleles above hard_max are dropped.
+    /// Alleles between soft_max and hard_max are optional.
+    variant_length_band: Option<(usize, usize)>,
     /// Tracks the chromosome lengths
     chrom_lengths: HashMap<String, usize>,
     /// If true, changes output messages slightly
@@ -58,6 +61,7 @@ impl RegionIterator {
     /// * `reference_genome` - the pre-loaded reference genome dictionary
     /// * `flank_size` - the window to merge variants
     /// * `enable_trimming` - allows variants to get trimmed, removing extra bases from REF/ALT
+    /// * `variant_length_band` - optional `(soft_max, hard_max)` event-length thresholds applied to both VCFs
     #[allow(clippy::too_many_arguments)]
     pub fn new_compare_iterator(
         truth_vcf_fn: &Path,
@@ -67,7 +71,8 @@ impl RegionIterator {
         confidence_regions: &Path,
         reference_genome: &ReferenceGenome,
         flank_size: usize,
-        enable_trimming: bool
+        enable_trimming: bool,
+        variant_length_band: Option<(usize, usize)>
     ) -> anyhow::Result<Self> {
         // Open the VCF files
         let mut truth_vcf_reader = VcfBuilder::default()
@@ -108,6 +113,7 @@ impl RegionIterator {
             region_queue: Default::default(),
             flank_size,
             enable_trimming,
+            variant_length_band,
             chrom_lengths,
             is_compare_iterator: true,
             preloaded_variants: None
@@ -177,6 +183,7 @@ impl RegionIterator {
             region_queue: Default::default(),
             flank_size,
             enable_trimming,
+            variant_length_band: None,
             chrom_lengths,
             is_compare_iterator: false,
             preloaded_variants: None
@@ -250,7 +257,7 @@ impl RegionIterator {
 
                 // load the variants into memory
                 match load_variants_in_region(
-                    &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region, self.enable_trimming
+                    &vcf_header, &mut vcf_reader, vcf_index, full_chrom_region, self.enable_trimming, self.variant_length_band
                 ).with_context(|| format!("Error while pre-loading variants from input index {vi} ({vcf_path:?}) in {full_chrom_region}:")) {
                     Ok(v) => Ok(
                         ((vi, chrom_index), v)
@@ -325,7 +332,7 @@ impl Iterator for RegionIterator {
 
                         // load the variants into memory
                         match load_variants_in_region(
-                            &vcf_header, &mut vcf_reader, vcf_index, &full_chrom_region, self.enable_trimming
+                            &vcf_header, &mut vcf_reader, vcf_index, &full_chrom_region, self.enable_trimming, self.variant_length_band
                         ).with_context(|| format!("Error while parsing variants from input #{i} in {full_chrom_region}:")) {
                             Ok(v) => Ok((i, v)),
                             Err(e) => Err(e)
@@ -478,12 +485,14 @@ impl Iterator for RegionIterator {
 /// * `sample_index` - index of the sample in the VCF file, usually 0 in our case
 /// * `region` - the full region to load variants from
 /// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
+/// * `variant_length_band` - optional `(soft_max, hard_max)` event-length thresholds
 fn load_variants_in_region(
     vcf_header: &vcf::Header,
     vcf_reader: &mut VcfReader<noodles::bgzf::io::Reader<File>>,
     sample_index: usize,
     region: &Region,
-    enable_trimming: bool
+    enable_trimming: bool,
+    variant_length_band: Option<(usize, usize)>
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     // first, check if the sequence name is in the index
     // this is does outside the Err(e) because of borrow checking
@@ -528,7 +537,7 @@ fn load_variants_in_region(
                 "Error while converting first variant record to buffer".to_string()
             })?;
     
-        let variants = parse_variant(&record_buf, sample_index, enable_trimming)
+        let variants = parse_variant(&record_buf, sample_index, enable_trimming, variant_length_band)
             .with_context(|| {
                 format!("Error parsing variants in {record_buf:?}:")
             })?;
@@ -555,10 +564,12 @@ fn load_variants_in_region(
 /// * `record` - the record to parse
 /// * `sample_index` - index of the sample to pull genotypes from
 /// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
+/// * `variant_length_band` - optional `(soft_max, hard_max)` event-length thresholds
 fn parse_variant(
     record: &vcf::variant::RecordBuf,
     sample_index: usize,
-    enable_trimming: bool
+    enable_trimming: bool,
+    variant_length_band: Option<(usize, usize)>
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     // variant level column
     let chrom = record.reference_sequence_name();
@@ -568,7 +579,8 @@ fn parse_variant(
     
     // sample specific information
     let all_samples = record.samples();
-    let sample = all_samples.get_index(sample_index).unwrap();
+    let sample = all_samples.get_index(sample_index)
+        .ok_or_else(|| anyhow!("Missing sample fields at index {sample_index}"))?;
     let gt = match sample.get(vcf_key::GENOTYPE)
         .ok_or(anyhow!("Missing GT"))? {
         Some(gt) => gt,
@@ -609,11 +621,10 @@ fn parse_variant(
             assert!(alt_sequence.pop().is_some());
         }
 
-        // TODO: do we want to parameterize this?
-        let allele_size_limit = 10000;
-        if ref_sequence.len() > allele_size_limit || alt_sequence.len() > allele_size_limit {
+        // Safety cap on allele sequence length. The hard max cannot exceed this.
+        const MAX_ALLELE_LENGTH: usize = 10000;
+        if ref_sequence.len() > MAX_ALLELE_LENGTH || alt_sequence.len() > MAX_ALLELE_LENGTH {
             debug!("Ignoring variant at {chrom}:{pos} {}>{}", ref_sequence.len(), alt_sequence.len());
-            // TODO: do we care to track the number of variant ignored due to length?
             continue;
         }
 
@@ -638,6 +649,18 @@ fn parse_variant(
 
         // set the raw allele space, which was captured prior to trimming
         variant.set_raw_allele_space(raw_allele_space)?;
+
+        if let Some((soft_max, hard_max)) = variant_length_band {
+            let event_length = variant.alt_ed()?;
+            match classify_allele_length(event_length, soft_max, hard_max) {
+                AlleleLengthClass::Dropped => {
+                    debug!("Ignoring variant at {chrom}:{pos} with event length {event_length}");
+                    continue;
+                },
+                AlleleLengthClass::Optional => variant.set_optional(),
+                AlleleLengthClass::Required => {},
+            }
+        }
 
         // save the variant
         ret.push((variant, zygosity));
@@ -803,9 +826,45 @@ fn get_variant_containment(interval: &Interval, variant: &Variant) -> Containmen
     }
 }
 
+/// How an allele is treated once its event length is known.
+enum AlleleLengthClass {
+    /// At or below the soft max: always scored
+    Required,
+    /// Between the soft max and the hard max: scored only when it lowers edit distance
+    Optional,
+    /// Above the hard max: not loaded
+    Dropped
+}
+
+/// Classifies an allele event length against a soft max and a hard max.
+/// # Arguments
+/// * `event_length` - edit distance between the REF and ALT sequences
+/// * `soft_max` - event length at or below which the allele is required
+/// * `hard_max` - event length above which the allele is dropped
+fn classify_allele_length(event_length: usize, soft_max: usize, hard_max: usize) -> AlleleLengthClass {
+    if event_length > hard_max {
+        AlleleLengthClass::Dropped
+    } else if event_length > soft_max {
+        AlleleLengthClass::Optional
+    } else {
+        AlleleLengthClass::Required
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
+
+    /// Event length at the soft max is required, between the limits is optional, and above the hard max is dropped.
+    #[test]
+    fn test_classify_allele_length() {
+        let soft_max = 50;
+        let hard_max = 100;
+        assert!(matches!(classify_allele_length(50, soft_max, hard_max), AlleleLengthClass::Required));
+        assert!(matches!(classify_allele_length(51, soft_max, hard_max), AlleleLengthClass::Optional));
+        assert!(matches!(classify_allele_length(100, soft_max, hard_max), AlleleLengthClass::Optional));
+        assert!(matches!(classify_allele_length(101, soft_max, hard_max), AlleleLengthClass::Dropped));
+    }
 
     /*
     TODO: we likely need to add tests for all the various parsing functions above

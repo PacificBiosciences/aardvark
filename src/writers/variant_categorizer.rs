@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::data_types::compare_benchmark::CompareBenchmark;
 use crate::data_types::compare_region::CompareRegion;
 use crate::data_types::phase_enums::PhasedZygosity;
-use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
+use crate::data_types::variant_metrics::{Classification, VariantMetrics, VariantSource};
 use crate::data_types::variants::Variant;
 
 pub const BENCHMARK_DECISION_KEY: &str = "BD";
@@ -173,12 +173,15 @@ impl VariantCategorizer {
     /// * `region_id` - passed through to FORMAT:RI
     /// * `chrom` - chromosome
     /// * `variants` - the variants that were parsed from the input, not necessarily identical to the input VCF
-    /// * `zygosity` - the parsed zygosity
-    /// * `bench_data` - the comparison data, which determines whether the variant is a TP, FN, or FP
+    /// * `zygosity` - the parsed zygosity from the input VCF
+    /// * `bench_data` - the comparison data, which determines whether the variant is a TP, FN, or FP. `Excluded` entries are omitted.
     fn write_variants(&mut self, source: VariantSource, region_id: u64, chrom: &str, variants: &[Variant], zygosity: &[PhasedZygosity], bench_data: &[VariantMetrics]) -> anyhow::Result<()> {
         // make sure we didn't do something stupid
         assert_eq!(self.source, source);
         for ((variant, &zygosity), bd) in variants.iter().zip(zygosity.iter()).zip(bench_data.iter()) {
+            if bd.classification() == Classification::Excluded {
+                continue;
+            }
             // convert REF and ALT back into strings
             let ref_allele = std::str::from_utf8(variant.allele0())?;
             let alternate_bases = record_buf::AlternateBases::from(
@@ -192,6 +195,7 @@ impl VariantCategorizer {
                 PhasedZygosity::PhasedHet01 => "0|1",
                 PhasedZygosity::PhasedHet10 => "1|0",
                 PhasedZygosity::HomozygousAlternate => "1/1",
+                PhasedZygosity::Excluded => bail!("PhasedZygosity::Excluded cannot be written"),
             };
             let classification = bd.classification();
 

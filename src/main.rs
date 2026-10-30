@@ -141,6 +141,9 @@ fn run_compare(settings: CompareSettings) {
     if settings.enable_record_basepair_scoring {
         metrics_to_write.push(MetricsType::RecordBasepair);
     }
+    if settings.enable_hpc_basepair_scoring {
+        metrics_to_write.push(MetricsType::HpcBasepair);
+    }
 
     // prep any writer accumulators
     // build the summary writer
@@ -195,7 +198,8 @@ fn run_compare(settings: CompareSettings) {
         &settings.regions,
         &reference_genome,
         settings.min_variant_gap,
-        !settings.disable_variant_trimming
+        !settings.disable_variant_trimming,
+        settings.soft_max_variant_length.zip(settings.hard_max_variant_length)
     ) {
         Ok(ri) => ri,
         Err(e) => {
@@ -236,6 +240,7 @@ fn run_compare(settings: CompareSettings) {
     let compare_config = match CompareConfigBuilder::default()
         .enable_sequences(region_seq_writer.is_some())
         .max_branch_factor(settings.max_branch_factor)
+        .enable_hpc_basepair_scoring(settings.enable_hpc_basepair_scoring)
         .build() {
         Ok(cc) => cc,
         Err(e) => {
@@ -283,6 +288,7 @@ fn run_compare(settings: CompareSettings) {
     let joint_weighted_hap = joint_metrics.weighted_hap();
     let joint_basepair = joint_metrics.basepair();
     let joint_record_bp = joint_metrics.record_bp();
+    let joint_hpc_basepair = joint_metrics.hpc_basepair();
     let solved_blocks = summary_writer.solved_blocks();
     let error_blocks = summary_writer.error_blocks();
 
@@ -311,6 +317,12 @@ fn run_compare(settings: CompareSettings) {
         info!("\tRecall: {:?}", joint_record_bp.recall());
         info!("\tPrecision: {:?}", joint_record_bp.precision());
         info!("\tF1: {:?}", joint_record_bp.f1());
+    }
+    if settings.enable_hpc_basepair_scoring {
+        info!("Joint HPC Basepair: {joint_hpc_basepair:?}");
+        info!("\tRecall: {:?}", joint_hpc_basepair.recall());
+        info!("\tPrecision: {:?}", joint_hpc_basepair.precision());
+        info!("\tF1: {:?}", joint_hpc_basepair.f1());
     }
     info!("Solved:error blocks: {solved_blocks} : {error_blocks}");
 

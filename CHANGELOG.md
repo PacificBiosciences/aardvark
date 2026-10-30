@@ -1,3 +1,11 @@
+# v1.1.0
+## Changes
+- Adds `--soft-max-variant-length` and `--hard-max-variant-length` to `compare`. Alleles between the two lengths, in either VCF, are scored only when including them lowers the truth-query edit distance. Alleles above the hard max are ignored.
+- Adds the optional `HPC_BASEPAIR` comparison type to all summary files. Review our [methods](./docs/methods.md#homopolymer-compressed-basepair) for details on this metric. This metric is enabled with `--enable-hpc-basepair-metrics`.
+
+## Fixed
+- Replaced a panic while parsing a VCF record that is missing sample fields with an error identifying the missing fields.
+
 # v1.0.0
 ## Fixed
 - Patched the `--regions` option to be required by the CLI. Previously, this was not flagged as required by the CLI but would fail when run without the option.
