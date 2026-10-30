@@ -176,15 +176,15 @@ pub struct MergeSettings {
 pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<MergeSettings> {
     // hard code the version in
     settings.aardvark_version = FULL_VERSION.clone();
-    info!("Aardvark version: {:?}", &settings.aardvark_version);
+    info!("Aardvark version: {:?}", settings.aardvark_version);
     info!("Sub-command: merge");
     info!("Inputs:");
 
     // check for all the required input files
     check_required_filename(&settings.reference_fn, "Reference FASTA")?;
-    info!("\tReference: {:?}", &settings.reference_fn);
+    info!("\tReference: {:?}", settings.reference_fn);
     check_required_filename(&settings.merge_regions, "Merge regions")?;
-    info!("\tMerge regions: {:?}", &settings.merge_regions);
+    info!("\tMerge regions: {:?}", settings.merge_regions);
     
     // check the input VCFs and corresponding metadata
     for (i, i_vcf) in settings.vcf_filenames.iter().enumerate() {
@@ -204,8 +204,8 @@ pub fn check_merge_settings(mut settings: MergeSettings) -> anyhow::Result<Merge
     
     // outputs
     info!("Outputs:");
-    info!("\tVCF folder: {:?}", &settings.output_vcf_folder);
-    info!("\tSummary: {:?}", &settings.output_summary_filename);
+    info!("\tVCF folder: {:?}", settings.output_vcf_folder);
+    info!("\tSummary: {:?}", settings.output_summary_filename);
     if let Some(debug_folder) = settings.debug_folder.as_ref() {
         info!("\tDebug folder: {debug_folder:?}");
     }

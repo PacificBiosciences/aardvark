@@ -457,7 +457,7 @@ mod tests {
         // iterate, making sure everything is fine even as we go well beyond seq_23
         let mut dwfa = DWFALite::default();
         for i in 0..c1.len() {
-            dwfa.update(seq_23.as_bytes(), c1[0..(i+1)].as_bytes()).unwrap();
+            dwfa.update(seq_23.as_bytes(), &c1.as_bytes()[0..(i+1)]).unwrap();
             assert!(dwfa.edit_distance() <= 2);
         }
         assert_eq!(dwfa.edit_distance(), 2);

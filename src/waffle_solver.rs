@@ -70,12 +70,15 @@ use std::collections::BTreeMap;
 use crate::data_types::compare_benchmark::{CompareBenchmark, SequenceBundle};
 use crate::data_types::compare_region::CompareRegion;
 use crate::data_types::coordinates::Coordinates;
+use crate::data_types::grouped_metrics::MetricsType;
 use crate::data_types::phase_enums::{Allele, Haplotype, PhasedZygosity};
 use crate::data_types::summary_metrics::SummaryMetrics;
+use crate::data_types::variant_metrics::VariantSource;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::exact_gt_optimizer::optimize_gt_alleles;
 use crate::parsing::stratifications::Stratifications;
 use crate::query_optimizer::{optimize_sequences, OptimizedHaplotypes};
+use crate::util::sequence::homopolymer_compress;
 use crate::util::sequence_alignment::wfa_ed;
 
 /// These are the variants we currently allow
@@ -98,6 +101,9 @@ pub struct CompareConfig {
     enable_sequences: bool,
     /// maximum branch factor in the query optimizer; limits exponential blowup
     max_branch_factor: usize,
+    /// if True, computes homopolymer-compressed basepair metrics.
+    /// we needed this option because other optional metrics are derivable, this one is not.
+    enable_hpc_basepair_scoring: bool,
 }
 
 impl Default for CompareConfig {
@@ -107,6 +113,7 @@ impl Default for CompareConfig {
         Self {
             enable_sequences: true,
             max_branch_factor: 50,
+            enable_hpc_basepair_scoring: false,
         }
     }
 }
@@ -235,10 +242,25 @@ pub fn solve_compare_region(
     truth_stats.add_swap_benchmark(&query_stats)?;
 
     // now add all the basepair-level stats
-    add_basepair_stats(problem, reference_genome, &mut truth_stats, &optimized_haplotypes)?;
+    add_basepair_stats(
+        problem, reference_genome, &mut truth_stats, &optimized_haplotypes,
+        MetricsType::Basepair,
+    )?;
+
+    // add homopolymer-compressed basepair stats if enabled
+    if compare_config.enable_hpc_basepair_scoring {
+        add_basepair_stats(
+            problem, reference_genome, &mut truth_stats, &optimized_haplotypes,
+            MetricsType::HpcBasepair,
+        )?;
+    }
 
     // lastly add in our record-basepair level stats
-    add_record_basepair_stats(problem, &mut truth_stats)?;
+    add_record_basepair_stats(
+        &mut truth_stats,
+        truth_variants, optimized_haplotypes.truth_zygosity(),
+        query_variants, optimized_haplotypes.query_zygosity()
+    )?;
 
     // add in the containment regions if we have them
     if let Some(cr) = containment_regions {
@@ -280,6 +302,16 @@ fn compare_expected_observed(
     let zip1 = exp_hap1.iter().cloned().zip(obs_hap1.iter().cloned());
     let zip2 = exp_hap2.iter().cloned().zip(obs_hap2.iter().cloned());
     for (v, ((exp_h1, obs_h1), (exp_h2, obs_h2))) in variants.iter().zip(zip1.zip(zip2)) {
+        if exp_h1 == Allele::Excluded || exp_h2 == Allele::Excluded {
+            ensure!(
+                exp_h1 == Allele::Excluded && exp_h2 == Allele::Excluded
+                    && obs_h1 == Allele::Excluded && obs_h2 == Allele::Excluded,
+                "excluded alleles must stay excluded on both haplotypes"
+            );
+            benchmark.add_excluded_variant(v, VariantSource::Truth)?;
+            continue;
+        }
+
         // convert alleles into allele counts
         let exp_count = exp_h1.to_allele_count() + exp_h2.to_allele_count();
         let obs_count = obs_h1.to_allele_count() + obs_h2.to_allele_count();
@@ -292,16 +324,22 @@ fn compare_expected_observed(
     Ok(benchmark)
 }
 
-/// Adds the basepair level statistics to our final result
+/// Adds the basepair level statistics to our final result.
+/// If `compare_type` is `MetricsType::HpcBasepair`, the sequences are homopolymer-compressed prior to comparison.
 /// # Arguments
 /// * `problem` - the problem we're looking at
 /// * `reference_genome` - full reference we use
 /// * `bench_result` - a mutable result that we are adding basepair statistics to
 /// * `optimized_haps` - the optimized truth/query paired haplotypes
+/// * `compare_type` - must be either `MetricsType::Basepair` or `MetricsType::HpcBasepair`
 fn add_basepair_stats(
     problem: &CompareRegion, reference_genome: &ReferenceGenome,
-    bench_result: &mut CompareBenchmark, optimized_haps: &OptimizedHaplotypes
+    bench_result: &mut CompareBenchmark, optimized_haps: &OptimizedHaplotypes,
+    compare_type: MetricsType,
 ) -> anyhow::Result<()> {
+    // check the compare type is valid
+    ensure!(compare_type == MetricsType::Basepair || compare_type == MetricsType::HpcBasepair, "compare type must be BASEPAIR or HPC_BASEPAIR, got {compare_type:?}");
+
     // pull out problem fields
     let problem_id = problem.region_id();
     let coordinates = problem.coordinates();
@@ -309,7 +347,7 @@ fn add_basepair_stats(
     let ref_start = coordinates.start() as usize;
     let ref_end = coordinates.end() as usize;
 
-    // get our variants and zygosity from the problem and optimized solution
+    // variants come from the region; Excluded zygosity is tracked on the optimized haplotypes
     let truth_variants = problem.truth_variants();
     let truth_zygosity = optimized_haps.truth_zygosity();
     let query_variants = problem.query_variants();
@@ -333,24 +371,25 @@ fn add_basepair_stats(
         assert_eq!(&query_seq, p_query_seq);
 
         // now do a basepair level comparison
-        let align_metrics = perform_basepair_compare(
+        let align_metrics = compare_haplotype_sequences(
             &reference[ref_start..ref_end],
-            &truth_seq, &query_seq
+            &truth_seq, &query_seq,
+            compare_type,
         )?;
         debug!("B#{problem_id} Align metrics: {align_metrics:?}");
-        bench_result.add_basepair_metrics(align_metrics, None);
+        record_basepair_compare_metrics(bench_result, align_metrics, None, compare_type)?;
 
         // also add negatives from skipping variant incorporation; remember these are doubled
         let truth_vs = 2 * truth_ed as u64;
         let query_vs = 2 * query_ed as u64;
         let skip_metrics = SummaryMetrics::new(0, truth_vs, 0, query_vs);
-        bench_result.add_basepair_metrics(skip_metrics, None);
+        record_basepair_compare_metrics(bench_result, skip_metrics, None, compare_type)?;
 
         // for each variant type, we need to filter the right variants in, and then re-compute
         for &filter_type in SUPPORTED_VARIANT_TYPES.iter() {
             // first, we filter the query sequence by variant type to get TP & FP; FNs have to be ignored since we filtered query, TP may be different
             let (filt_qv, filt_qz): (Vec<Variant>, Vec<PhasedZygosity>) = query_variants.iter().zip(query_zygosity.iter())
-                .filter_map(|(qv, &qz)| if qv.variant_type() == filter_type {
+                .filter_map(|(qv, &qz)| if qv.variant_type() == filter_type && qz != PhasedZygosity::Excluded {
                     // put the clones here to reduce overhead
                     Some((qv.clone(), qz))
                 } else {
@@ -365,9 +404,10 @@ fn add_basepair_stats(
                 ).with_context(|| format!("Error while generating sequence for filtered query haplotype 1: {filter_type:?}"))?;
                 let failed_vs = 2 * failed_ed as u64;
 
-                let filt_align_metrics = perform_basepair_compare(
+                let filt_align_metrics = compare_haplotype_sequences(
                     &reference[ref_start..ref_end],
-                    &truth_seq, &filtered_query
+                    &truth_seq, &filtered_query,
+                    compare_type,
                 )?;
 
                 (filt_align_metrics.query_tp, filt_align_metrics.query_fp + failed_vs) // add the failed incorporations
@@ -377,7 +417,7 @@ fn add_basepair_stats(
 
             // second, we filter the truth sequence by variant type to get TP & FN; FPs have to be ignored since we filtered query, TP may be different
             let (filt_tv, filt_tz): (Vec<Variant>, Vec<PhasedZygosity>) = truth_variants.iter().zip(truth_zygosity.iter())
-                .filter_map(|(tv, &tz)| if tv.variant_type() == filter_type {
+                .filter_map(|(tv, &tz)| if tv.variant_type() == filter_type && tz != PhasedZygosity::Excluded {
                     // put the clones here to reduce overhead
                     Some((tv.clone(), tz))
                 } else {
@@ -392,9 +432,10 @@ fn add_basepair_stats(
                 ).with_context(|| format!("Error while generating sequence for filtered truth haplotype 1: {filter_type:?}"))?;
                 let failed_vs = 2 * failed_ed as u64;
 
-                let filt_align_metrics = perform_basepair_compare(
+                let filt_align_metrics = compare_haplotype_sequences(
                     &reference[ref_start..ref_end],
-                    &filtered_truth, &query_seq
+                    &filtered_truth, &query_seq,
+                    compare_type,
                 )?;
 
                 (filt_align_metrics.truth_tp, filt_align_metrics.truth_fn + failed_vs)
@@ -407,24 +448,73 @@ fn add_basepair_stats(
                 truth_tp, truth_fn, query_tp, query_fp
             );
             debug!("\t{filter_type:?} => {vt_align_metrics:?}");
-            bench_result.add_basepair_metrics(vt_align_metrics, Some(filter_type));
+            record_basepair_compare_metrics(bench_result, vt_align_metrics, Some(filter_type), compare_type)?;
         }
     }
 
     Ok(())
 }
 
-/// Adds the record-basepair level statistics to our final result
+/// Dispatches to standard or homopolymer-compressed basepair comparison.
 /// # Arguments
-/// * `problem` - the problem we're looking at
-/// * `bench_result` - a mutable result that we are adding record-basepair statistics to
-fn add_record_basepair_stats(
-    problem: &CompareRegion, bench_result: &mut CompareBenchmark
+/// * `reference_sequence` - the reference sequence or baseline
+/// * `truth_sequence` - the truth or baseline sequence
+/// * `query_sequence` - the query sequence, which is aligned to truth
+/// * `compare_type` - `MetricsType::Basepair` or `MetricsType::HpcBasepair`
+fn compare_haplotype_sequences(
+    reference_sequence: &[u8],
+    truth_sequence: &[u8],
+    query_sequence: &[u8],
+    compare_type: MetricsType,
+) -> anyhow::Result<SummaryMetrics> {
+    match compare_type {
+        MetricsType::Basepair => {
+            perform_basepair_compare(reference_sequence, truth_sequence, query_sequence)
+        }
+        MetricsType::HpcBasepair => {
+            perform_hpc_basepair_compare(reference_sequence, truth_sequence, query_sequence)
+        }
+        _ => bail!("compare type must be BASEPAIR or HPC_BASEPAIR, got {compare_type:?}"),
+    }
+}
+
+/// Records alignment metrics into the BASEPAIR or HPC_BASEPAIR bucket.
+/// # Arguments
+/// * `bench_result` - the benchmark result to update
+/// * `metrics` - the metrics to get added into the current values
+/// * `variant_type` - optional variant type these stats are added to; if none, it goes into the "All" grouping
+/// * `compare_type` - `MetricsType::Basepair` or `MetricsType::HpcBasepair`
+fn record_basepair_compare_metrics(
+    bench_result: &mut CompareBenchmark,
+    metrics: SummaryMetrics,
+    variant_type: Option<VariantType>,
+    compare_type: MetricsType,
 ) -> anyhow::Result<()> {
-    // count the total number of each basepair type in the problem
+    match compare_type {
+        MetricsType::Basepair => bench_result.add_basepair_metrics(metrics, variant_type),
+        MetricsType::HpcBasepair => bench_result.add_hpc_basepair_metrics(metrics, variant_type),
+        _ => bail!("compare type must be BASEPAIR or HPC_BASEPAIR, got {compare_type:?}"),
+    };
+    Ok(())
+}
+
+/// Adds the record-basepair level statistics to our final result.
+/// Zygosity is aligned with the variant lists. `Excluded` entries contribute nothing.
+/// # Arguments
+/// * `bench_result` - a mutable result that we are adding record-basepair statistics to
+/// * `truth_variants` - loaded truth variants
+/// * `truth_zygosity` - optimizer zygosity aligned with `truth_variants`
+/// * `query_variants` - loaded query variants
+/// * `query_zygosity` - optimizer zygosity aligned with `query_variants`
+fn add_record_basepair_stats(
+    bench_result: &mut CompareBenchmark,
+    truth_variants: &[Variant], truth_zygosity: &[PhasedZygosity],
+    query_variants: &[Variant], query_zygosity: &[PhasedZygosity]
+) -> anyhow::Result<()> {
+    // count the total number of each basepair type in the kept alleles
     let mut truth_total = 0;
     let mut truth_total_by_vt: BTreeMap<VariantType, u64> = Default::default();
-    for (variant, zygosity) in problem.truth_variants().iter().zip(problem.truth_zygosity().iter()) {
+    for (variant, zygosity) in truth_variants.iter().zip(truth_zygosity.iter()) {
         // the total count is the zygosity count times the raw allele space
         let zyg_count = zygosity.to_allele_count() as u64;
         let count_value = zyg_count * variant.raw_allele_space() as u64;
@@ -437,7 +527,7 @@ fn add_record_basepair_stats(
     // do the same for the query
     let mut query_total = 0;
     let mut query_total_by_vt: BTreeMap<VariantType, u64> = Default::default();
-    for (variant, zygosity) in problem.query_variants().iter().zip(problem.query_zygosity().iter()) {
+    for (variant, zygosity) in query_variants.iter().zip(query_zygosity.iter()) {
         // the total count is the zygosity count times the raw allele space
         let zyg_count = zygosity.to_allele_count() as u64;
         let count_value = zyg_count * variant.raw_allele_space() as u64;
@@ -544,6 +634,23 @@ fn perform_basepair_compare(
     Ok(summary_metrics)
 }
 
+/// Like [`perform_basepair_compare`], but homopolymer-compresses reference, truth, and query first.
+/// # Arguments
+/// * `reference_sequence` - the reference sequence or baseline
+/// * `truth_sequence` - the truth or baseline sequence
+/// * `query_sequence` - the query sequence, which is aligned to truth
+fn perform_hpc_basepair_compare(
+    reference_sequence: &[u8],
+    truth_sequence: &[u8],
+    query_sequence: &[u8],
+) -> anyhow::Result<SummaryMetrics> {
+    perform_basepair_compare(
+        &homopolymer_compress(reference_sequence),
+        &homopolymer_compress(truth_sequence),
+        &homopolymer_compress(query_sequence),
+    )
+}
+
 /*
 Another idea:
 - One issue with some of the above approaches is that we are allowing FP/FN variants to "disappear" in the graph traversal
@@ -576,15 +683,8 @@ fn generate_haplotype_sequence(
     let mut alleles = Vec::<Allele>::with_capacity(zygosities.len());
     
     for zyg in zygosities.iter() {
-        // turn zygosity into an allele pair
-        let (a1, a2) = match *zyg {
-            PhasedZygosity::Unknown => bail!("Unknown zygosity encountered in variant"),
-            PhasedZygosity::HomozygousReference => (Allele::Reference, Allele::Reference),
-            PhasedZygosity::UnphasedHeterozygous => (Allele::Reference, Allele::Alternate),
-            PhasedZygosity::PhasedHet01 => (Allele::Reference, Allele::Alternate),
-            PhasedZygosity::PhasedHet10 => (Allele::Alternate, Allele::Reference),
-            PhasedZygosity::HomozygousAlternate => (Allele::Alternate, Allele::Alternate),
-        };
+        // turn zygosity into an allele pair; Excluded becomes Allele::Excluded and is skipped below
+        let (a1, a2) = zyg.decompose_alleles();
     
         // select which allele based on the haplotype
         let allele = match haplotype {
@@ -622,6 +722,10 @@ fn generate_allele_sequence(
     let mut current_sequence = vec![];
     let mut failed_ed = 0;
     for (variant, &allele) in variants.iter().zip(alleles.iter()) {
+        if allele == Allele::Excluded {
+            // optional allele left out of the haplotype
+            continue;
+        }
         if allele == Allele::Reference && variant.convert_index(0) == 0 {
             // indicates that this allele matches the reference genome, lets skip it entirely
             continue;
@@ -648,6 +752,7 @@ fn generate_allele_sequence(
         // now add the appropriate sequence from the variant and increase our reference position to match the variant reference length
         let variant_sequence = match allele {
             Allele::Unknown => bail!("Allele::Unknown encountered"),
+            Allele::Excluded => bail!("Allele::Excluded encountered"),
             Allele::Reference => variant.allele0(),
             Allele::Alternate => variant.allele1(),
         };
@@ -667,7 +772,7 @@ fn generate_allele_sequence(
 #[cfg(test)]
 mod tests {
     use crate::data_types::summary_metrics::{SummaryGtMetrics, SummaryMetrics};
-    use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
+    use crate::data_types::variant_metrics::{Classification, VariantMetrics, VariantSource};
 
     use super::*;
 
@@ -785,7 +890,7 @@ mod tests {
         let group_metrics = result.group_metrics();
         assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(1, 0, 1, 0, 0, 0));
         assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(1, 0, 1, 0));
-        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*1, 0, 2*1, 0));
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2, 0, 2, 0));
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap()]);
         assert_eq!(result.query_variant_data(), &[VariantMetrics::new(VariantSource::Query, 1, 1).unwrap()]);
 
@@ -958,7 +1063,7 @@ mod tests {
         let group_metrics = result.group_metrics();
         assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
         assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(0, 1, 0, 0));
-        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(0, 2*1, 0, 0)); // 1bp FN
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(0, 2, 0, 0)); // 1bp FN
         assert_eq!(result.truth_variant_data(), &[VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap()]);
         assert_eq!(result.query_variant_data(), &[]);
 
@@ -1004,7 +1109,7 @@ mod tests {
         let group_metrics = result.group_metrics();
         assert_eq!(*group_metrics.joint_metrics().gt(), SummaryGtMetrics::new(2, 1, 1, 1, 0, 1));
         assert_eq!(*group_metrics.joint_metrics().hap(), SummaryMetrics::new(2, 1, 2, 1));
-        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 2*1, 2*2, 2*1)); // 2 matching bp; 1 FN, 1 FP
+        assert_eq!(*group_metrics.joint_metrics().basepair(), SummaryMetrics::new(2*2, 2, 2*2, 2)); // 2 matching bp; 1 FN, 1 FP
         assert_eq!(result.truth_variant_data(), &[
             VariantMetrics::new(VariantSource::Truth, 1, 1).unwrap(), // FP in truth space
             VariantMetrics::new(VariantSource::Truth, 1, 0).unwrap(), // FN in truth space
@@ -1156,13 +1261,131 @@ mod tests {
             b"TAAAAT", // big insertion
             b"TAAAT" // mostly correctly, but one FN base
         ).unwrap();
-        assert_eq!(result, SummaryMetrics::new(2*2, 2*1, 2*2, 0));
+        assert_eq!(result, SummaryMetrics::new(2*2, 2, 2*2, 0));
 
         let result = perform_basepair_compare(
             b"TAT",
             b"TAAAAT", // big insertion
             b"TAAAAAT" // mostly correctly, but one FP base
         ).unwrap();
-        assert_eq!(result, SummaryMetrics::new(2*3, 0, 2*3, 2*1));
+        assert_eq!(result, SummaryMetrics::new(2*3, 0, 2*3, 2));
+    }
+
+    /// Two short deletions that together match one longer indel.
+    fn split_deletion_fixture() -> (ReferenceGenome, Vec<Variant>, Variant) {
+        let mut sequence = Vec::new();
+        sequence.extend_from_slice(b"AAAA");
+        sequence.extend(std::iter::repeat_n(b'C', 25));
+        sequence.push(b'T');
+        sequence.extend(std::iter::repeat_n(b'G', 26));
+        sequence.extend_from_slice(b"AAAA");
+
+        let mut genome = ReferenceGenome::empty_reference();
+        let sequence_str = String::from_utf8(sequence.clone()).unwrap();
+        genome.add_contig("mock_chr1".to_string(), &sequence_str).unwrap();
+
+        let short1 = Variant::new_deletion(0, 3, sequence[3..29].to_vec(), sequence[3..4].to_vec()).unwrap();
+        let short2 = Variant::new_deletion(0, 29, sequence[29..56].to_vec(), sequence[29..30].to_vec()).unwrap();
+        let mut long = Variant::new_indel(0, 3, sequence[3..56].to_vec(), b"AT".to_vec()).unwrap();
+        long.set_optional();
+        (genome, vec![short1, short2], long)
+    }
+
+    fn hom_zyg(n: usize) -> Vec<PhasedZygosity> {
+        vec![PhasedZygosity::HomozygousAlternate; n]
+    }
+
+    /// An optional long query allele that matches two short truth alleles is scored as a true positive and adds no basepair error.
+    #[test]
+    fn test_optional_query_matches_split_truth() {
+        let (genome, shorts, long) = split_deletion_fixture();
+        let coordinates = Coordinates::new("mock_chr1".to_string(), 0, genome.get_full_chromosome("mock_chr1").len() as u64);
+        let problem = CompareRegion::new(0, coordinates, shorts, hom_zyg(2), vec![long], hom_zyg(1)).unwrap();
+        let result = solve_compare_region(&problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(result.total_ed(), 0);
+        assert!(result.query_variant_data().iter().all(|m| m.classification() == Classification::TruePositive));
+        assert!(result.truth_variant_data().iter().all(|m| m.classification() == Classification::TruePositive));
+        assert_eq!(*result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(2, 0, 1, 0, 0, 0));
+        let basepair = result.group_metrics().joint_metrics().basepair();
+        assert_eq!(basepair.truth_fn, 0);
+        assert_eq!(basepair.query_fp, 0);
+        assert!(basepair.truth_tp > 0);
+    }
+
+    /// An optional long truth allele that matches two short query alleles is scored as a true positive.
+    #[test]
+    fn test_optional_truth_matches_split_query() {
+        let (genome, shorts, long) = split_deletion_fixture();
+        let coordinates = Coordinates::new("mock_chr1".to_string(), 0, genome.get_full_chromosome("mock_chr1").len() as u64);
+        let problem = CompareRegion::new(0, coordinates, vec![long], hom_zyg(1), shorts, hom_zyg(2)).unwrap();
+        let result = solve_compare_region(&problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(result.total_ed(), 0);
+        assert!(result.truth_variant_data().iter().all(|m| m.classification() == Classification::TruePositive));
+        assert!(result.query_variant_data().iter().all(|m| m.classification() == Classification::TruePositive));
+        assert_eq!(*result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(1, 0, 2, 0, 0, 0));
+    }
+
+    /// An unmatched optional allele is excluded from both genotype and basepair metrics, on either the truth or query side.
+    #[test]
+    fn test_optional_unmatched_allele_is_not_an_error() {
+        let mut genome = ReferenceGenome::empty_reference();
+        genome.add_contig("mock_chr1".to_string(), "ACGTACGTACGTACGTACGT").unwrap();
+        let coordinates = Coordinates::new("mock_chr1".to_string(), 0, 20);
+        let mut alt = b"A".to_vec();
+        alt.extend(std::iter::repeat_n(b'N', 80));
+        let mut insertion = Variant::new_insertion(0, 0, b"A".to_vec(), alt).unwrap();
+        insertion.set_optional();
+
+        let query_problem = CompareRegion::new(0, coordinates.clone(), vec![], vec![], vec![insertion.clone()], hom_zyg(1)).unwrap();
+        let query_result = solve_compare_region(&query_problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(query_result.query_variant_data(), &[VariantMetrics::excluded(VariantSource::Query)]);
+        assert_eq!(*query_result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(0, 0, 0, 0, 0, 0));
+        assert_eq!(*query_result.group_metrics().joint_metrics().basepair(), SummaryMetrics::new(0, 0, 0, 0));
+
+        let truth_problem = CompareRegion::new(1, coordinates, vec![insertion], hom_zyg(1), vec![], vec![]).unwrap();
+        let truth_result = solve_compare_region(&truth_problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(truth_result.truth_variant_data(), &[VariantMetrics::excluded(VariantSource::Truth)]);
+        assert_eq!(*truth_result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(0, 0, 0, 0, 0, 0));
+    }
+
+    /// An unmatched allele at or below the soft max length is still scored as a false positive or false negative.
+    #[test]
+    fn test_required_unmatched_allele_is_scored() {
+        let mut genome = ReferenceGenome::empty_reference();
+        genome.add_contig("mock_chr1".to_string(), "ACGTACGTACGTACGTACGT").unwrap();
+        let coordinates = Coordinates::new("mock_chr1".to_string(), 0, 20);
+        let mut alt = b"C".to_vec();
+        alt.extend(std::iter::repeat_n(b'N', 10));
+        let insertion = Variant::new_insertion(0, 1, b"C".to_vec(), alt).unwrap();
+
+        let query_problem = CompareRegion::new(0, coordinates.clone(), vec![], vec![], vec![insertion.clone()], hom_zyg(1)).unwrap();
+        let query_result = solve_compare_region(&query_problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(query_result.query_variant_data()[0].classification(), Classification::FalsePositive);
+        assert_eq!(*query_result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(0, 0, 0, 1, 0, 0));
+
+        let truth_problem = CompareRegion::new(1, coordinates, vec![insertion], hom_zyg(1), vec![], vec![]).unwrap();
+        let truth_result = solve_compare_region(&truth_problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(truth_result.truth_variant_data()[0].classification(), Classification::FalseNegative);
+        assert_eq!(*truth_result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
+    }
+
+    /// An optional query allele that only partially overlaps a required truth allele is excluded, and the truth allele remains a false negative.
+    #[test]
+    fn test_optional_partial_overlap_is_omitted_from_metrics() {
+        let (genome, shorts, _) = split_deletion_fixture();
+        let sequence = genome.get_full_chromosome("mock_chr1");
+        let mut partial = Variant::new_deletion(0, 3, sequence[3..55].to_vec(), sequence[3..4].to_vec()).unwrap();
+        partial.set_optional();
+        let coordinates = Coordinates::new("mock_chr1".to_string(), 0, sequence.len() as u64);
+        let problem = CompareRegion::new(
+            0, coordinates, vec![shorts[0].clone()], hom_zyg(1), vec![partial], hom_zyg(1)
+        ).unwrap();
+        let result = solve_compare_region(&problem, &genome, CompareConfig::default(), None).unwrap();
+        assert_eq!(result.query_variant_data(), &[VariantMetrics::excluded(VariantSource::Query)]);
+        assert_eq!(result.truth_variant_data()[0].classification(), Classification::FalseNegative);
+        assert_eq!(*result.group_metrics().joint_metrics().gt(), SummaryGtMetrics::new(0, 1, 0, 0, 0, 0));
+        let basepair = result.group_metrics().joint_metrics().basepair();
+        assert_eq!(basepair.query_fp, 0);
+        assert!(basepair.truth_fn > 0);
     }
 }

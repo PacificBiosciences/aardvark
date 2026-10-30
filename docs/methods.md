@@ -7,8 +7,12 @@ Table of contents:
   * [Merge command](#merge-command)
 * [Comparison types](#comparison-types)
   * [Basepair](#basepair)
-  * [Haplotype](#haplotype)
   * [Genotype](#genotype)
+  * [Optional comparison types](#optional-comparison-types)
+    * [Haplotype](#haplotype)
+    * [Weighted haplotype](#weighted-haplotype)
+    * [Record basepair](#record-basepair)
+    * [Homopolymer-compressed basepair](#homopolymer-compressed-basepair)
 
 # Overview
 Both `compare` and `merge` commands follow a three step process:
@@ -24,12 +28,13 @@ Aardvark then loads all variants that are **fully-contained** within each region
 Lastly, Aardvark splits the BED regions further by looking for gaps between consecutive variants across all files.
 Any gaps that larger than a defined window (50 bp) are split into sub-regions.
 Effectively, this clusters variants that are within 50 bp of each other into sub-regions, while accounting for gaps in the user-provided BED regions.
+When `--soft-max-variant-length` and `--hard-max-variant-length` are set, alleles longer than the hard max are dropped before this clustering step.
 
 ## Compare command
 In `compare` mode, Aardvark performs a comparison between "truth" and "query" sets.
 Each sub-region is compared independently, in parallel, using the following steps:
 
-1. Identify the optimal diplotype sequences - In this step, the algorithm searches for the optimal set of *phased* variant zygosities that minimizes the edit distance between the truth haplotype sequences and the query haplotype sequences. If pre-phased inputs are provided in the truth set, they are retained by Aardvark. In contrast, query phasing is ignored, allowing for phasing errors in the query set. This step outputs the optimal variant phasing and haplotype sequence pairs such that the edit distance between truth and query is minimized.
+1. Identify the optimal diplotype sequences - In this step, the algorithm searches for the optimal set of *phased* variant zygosities that minimizes the edit distance between the truth haplotype sequences and the query haplotype sequences. If pre-phased inputs are provided in the truth set, they are retained by Aardvark. In contrast, query phasing is ignored, allowing for phasing errors in the query set. This step outputs the optimal variant phasing and haplotype sequence pairs such that the edit distance between truth and query is minimized. Alleles in the optional length band are part of this search: each one is applied only when doing so strictly lowers that edit distance, and otherwise it is left out of the comparison.
 2. Compare the optimized sequences - The sequences are directly compared to calculate the total number of basepairs that are true positives (TP), false negatives (FN), and false positives (FP). This is calculated by measuring the edit distances between the reference genome, the truth optimal haplotype sequence, and the query optimal haplotype sequence. These values go into a system of equations to solve for TP, FN, and FP. The final results goes into the `BASEPAIR` comparison type.
 3. Compare the optimized alleles - Aardvark will also compare the individual alleles on a truth and query haplotype to determine if each is a TP, FN, or FP. Given a set of present alternate alleles on the truth and query haplotypes, it will search for a solution with the fewest number of errors (FN or FP) such that the generated haplotype sequences are identical. Conceptually, this process is very similar to that of [rtg vcfeval](https://github.com/RealTimeGenomics/rtg-tools). The results from each individual haplotype go into the `HAP` and `WEIGHTED_HAP` comparison types. The `HAP` evaluations are combined into a genotype-level score in the `GT` comparison type, where an error in either haplotype counts as an error in the `GT` score.
 
@@ -114,3 +119,16 @@ However, this metric may be appropriate for callers that are reference-agnostic 
 For example, the [TRGT tandem repeat caller](https://github.com/PacificBiosciences/trgt) generates long alleles for defined catalog regions, but without any priors that would bias it towards the reference allele.
 In this particular case, it may be more suitable to use the full record region (i.e. `RECORD_BP`) instead of just the differences (i.e. `BASEPAIR`), as TRGT is independently assembling the full allelic sequence and then converting that into a variant record.
 While `RECORD_BP` can be an acceptable metric for unbiased callers, we recommend all users review it in conjunction with the less biased `BASEPAIR` metric.
+
+### Homopolymer-compressed basepair
+The homopolymer-compressed basepair (`HPC_BASEPAIR`) type uses the same scoring as [`BASEPAIR`](#basepair) after collapsing every run of identical bases to a single base.
+Reference, truth, and query haplotype sequences are compressed independently, and the edit-distance comparison is then repeated on those shorter sequences.
+For example, `AAACCCG` is compressed to `ACG`, and `AAAA` is compressed to `A`.
+A difference that only changes the length of a homopolymer, such as `AAAA` versus `AA`, disappears because both sequences compress to `A`.
+A change that introduces a different base, such as `AAAA` versus `AACA`, is still scored because the compressed sequences differ (`A` versus `ACA`).
+As with `BASEPAIR`, partial matches are doubled to avoid floating-point values, and the truth TP and query TP counts are identical.
+The counts are in compressed bases, so `HPC_BASEPAIR` totals are not comparable to `BASEPAIR` totals.
+This metric is disabled by default and is enabled with `--enable-hpc-basepair-metrics`.
+
+This metric is most useful for understanding the impact of differences caused purely by homopolymer errors.
+When used in conjunction with the normal `BASEPAIR` metric, one can estimate the impact of homopolymer errors v. non-homopolymer errors in the query set.

@@ -1,4 +1,6 @@
 
+use anyhow::ensure;
+
 use crate::data_types::grouped_metrics::GroupTypeMetrics;
 use crate::data_types::summary_metrics::SummaryMetrics;
 use crate::data_types::variant_metrics::{VariantMetrics, VariantSource};
@@ -18,9 +20,9 @@ pub struct CompareBenchmark {
     group_metrics: GroupTypeMetrics,
 
     // variant level statistics
-    /// Variant metrics for truth variants
+    /// Variant metrics for each loaded truth variant. `Excluded` entries were left out of scoring.
     truth_variant_data: Vec<VariantMetrics>,
-    /// Variant metrics for query variant
+    /// Variant metrics for each loaded query variant. `Excluded` entries were left out of scoring.
     query_variant_data: Vec<VariantMetrics>,
 
     /// optional sequence bundle, this can use a lot of memory
@@ -86,6 +88,23 @@ impl CompareBenchmark {
         Ok(())
     }
 
+    /// Records an optional variant that was left out of the comparison.
+    /// The entry stays aligned with the loaded variants and is not added to the summary metrics.
+    /// # Arguments
+    /// * `variant` - the variant that was excluded
+    /// * `source` - whether the variant came from the truth or query VCF
+    /// # Errors
+    /// * if `variant` is not optional
+    pub fn add_excluded_variant(&mut self, variant: &Variant, source: VariantSource) -> anyhow::Result<()> {
+        ensure!(variant.is_optional(), "only optional variants can be excluded");
+        let metrics = VariantMetrics::excluded(source);
+        match source {
+            VariantSource::Truth => self.truth_variant_data.push(metrics),
+            VariantSource::Query => self.query_variant_data.push(metrics),
+        }
+        Ok(())
+    }
+
 
     /// Adds basepair metrics to the current tracking
     /// # Arguments
@@ -101,6 +120,14 @@ impl CompareBenchmark {
     /// * `variant_type` - optional variant type these stats are added to; if none, it goes into the "All" grouping
     pub fn add_record_bp_metrics(&mut self, record_bp_metrics: SummaryMetrics, variant_type: Option<VariantType>) {
         self.group_metrics.add_record_bp_metrics(record_bp_metrics, variant_type);
+    }
+
+    /// Adds homopolymer-compressed basepair metrics to the current tracking
+    /// # Arguments
+    /// * `hpc_basepair_metrics` - the metrics to get added into the current values
+    /// * `variant_type` - optional variant type these stats are added to; if none, it goes into the "All" grouping
+    pub fn add_hpc_basepair_metrics(&mut self, hpc_basepair_metrics: SummaryMetrics, variant_type: Option<VariantType>) {
+        self.group_metrics.add_hpc_basepair_metrics(hpc_basepair_metrics, variant_type);
     }
 
     /// Sets the values for a reverse benchmark. This is primarily to set query_tp and query_fp values from a reverse comparison.
@@ -181,5 +208,26 @@ impl SequenceBundle {
         Self {
             ref_seq, truth_seq1, truth_seq2, query_seq1, query_seq2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Excluded metrics can be recorded for either the truth or query VCF, and a required variant is rejected.
+    #[test]
+    fn test_add_excluded_variant_either_source() {
+        let mut benchmark = CompareBenchmark::new(0, 0, 0);
+        let mut variant = Variant::new_snv(0, 1, b"A".to_vec(), b"C".to_vec()).unwrap();
+        variant.set_optional();
+
+        benchmark.add_excluded_variant(&variant, VariantSource::Truth).unwrap();
+        benchmark.add_excluded_variant(&variant, VariantSource::Query).unwrap();
+        assert_eq!(benchmark.truth_variant_data(), &[VariantMetrics::excluded(VariantSource::Truth)]);
+        assert_eq!(benchmark.query_variant_data(), &[VariantMetrics::excluded(VariantSource::Query)]);
+
+        let required = Variant::new_snv(0, 2, b"A".to_vec(), b"G".to_vec()).unwrap();
+        assert!(benchmark.add_excluded_variant(&required, VariantSource::Truth).is_err());
     }
 }

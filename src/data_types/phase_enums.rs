@@ -14,7 +14,9 @@ pub enum Allele {
     /// Typically refers to reference allele, usually 0 in a file; could also mean the first alternate in multi-allelic context
     Reference,
     /// Typically refers to alternate allele, usually 1 in a file; could also mean the second alternate in multi-allelic context
-    Alternate
+    Alternate,
+    /// Optional allele that was left out of the comparison. This is not a reference call.
+    Excluded
 }
 
 impl Allele {
@@ -22,7 +24,8 @@ impl Allele {
     pub fn to_allele_count(&self) -> u8 {
         match self {
             Allele::Unknown |
-            Allele::Reference => 0,
+            Allele::Reference |
+            Allele::Excluded => 0,
             Allele::Alternate => 1,
         }
     }
@@ -42,7 +45,9 @@ pub enum PhasedZygosity {
     /// 1|0, 2|1, etc.
     PhasedHet10,
     /// 1/1, 2/2, etc.
-    HomozygousAlternate
+    HomozygousAlternate,
+    /// Optional allele that was left out of the comparison. This is not a reference call.
+    Excluded
 
     // TODO: do we need to handle haploid as well? for now, we can throw it into unknown
 }
@@ -57,7 +62,8 @@ impl PhasedZygosity {
             PhasedZygosity::Unknown |
             PhasedZygosity::HomozygousReference |
             PhasedZygosity::UnphasedHeterozygous |
-            PhasedZygosity::HomozygousAlternate => false,
+            PhasedZygosity::HomozygousAlternate |
+            PhasedZygosity::Excluded => false,
         }
     }
 
@@ -70,7 +76,8 @@ impl PhasedZygosity {
 
             PhasedZygosity::Unknown |
             PhasedZygosity::HomozygousReference |
-            PhasedZygosity::HomozygousAlternate => false,
+            PhasedZygosity::HomozygousAlternate |
+            PhasedZygosity::Excluded => false,
         }
     }
 
@@ -83,7 +90,8 @@ impl PhasedZygosity {
             PhasedZygosity::UnphasedHeterozygous |
             PhasedZygosity::PhasedHet01 |
             PhasedZygosity::PhasedHet10 |
-            PhasedZygosity::Unknown => false
+            PhasedZygosity::Unknown |
+            PhasedZygosity::Excluded => false
         }
     }
 
@@ -96,6 +104,7 @@ impl PhasedZygosity {
             PhasedZygosity::PhasedHet01 => (Allele::Reference, Allele::Alternate),
             PhasedZygosity::PhasedHet10 => (Allele::Alternate, Allele::Reference),
             PhasedZygosity::HomozygousAlternate => (Allele::Alternate, Allele::Alternate),
+            PhasedZygosity::Excluded => (Allele::Excluded, Allele::Excluded),
         }
     }
 
@@ -103,7 +112,8 @@ impl PhasedZygosity {
     pub fn to_allele_count(&self) -> u8 {
         match self {
             PhasedZygosity::Unknown |
-            PhasedZygosity::HomozygousReference => 0,
+            PhasedZygosity::HomozygousReference |
+            PhasedZygosity::Excluded => 0,
             PhasedZygosity::UnphasedHeterozygous |
             PhasedZygosity::PhasedHet01 |
             PhasedZygosity::PhasedHet10 => 1,
