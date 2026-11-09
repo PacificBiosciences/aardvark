@@ -1,3 +1,7 @@
+# Unreleased
+## Fixed
+- Alleles longer than 10 kbp were ignored without a warning (only a debug log line), so long SVs were missing from every metric. The limit is now 1 Mbp.
+
 # v1.1.0
 ## Changes
 - Adds `--soft-max-variant-length` and `--hard-max-variant-length` to `compare`. Alleles between the two lengths, in either VCF, are scored only when including them lowers the truth-query edit distance. Alleles above the hard max are ignored.

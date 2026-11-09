@@ -622,7 +622,8 @@ fn parse_variant(
         }
 
         // Safety cap on allele sequence length. The hard max cannot exceed this.
-        const MAX_ALLELE_LENGTH: usize = 10000;
+        // This was 10 kbp, which silently removed longer SVs from every metric.
+        const MAX_ALLELE_LENGTH: usize = 1_000_000;
         if ref_sequence.len() > MAX_ALLELE_LENGTH || alt_sequence.len() > MAX_ALLELE_LENGTH {
             debug!("Ignoring variant at {chrom}:{pos} {}>{}", ref_sequence.len(), alt_sequence.len());
             continue;
