@@ -9,6 +9,14 @@ pub enum DWFAError {
     AlreadyFinalized,
 }
 
+/// The end checks that `extend()` computes on its way over the diagonals.
+#[derive(Clone, Copy, Debug, Default)]
+struct Reached {
+    baseline_end: bool,
+    other_end: bool,
+    full_diagonal: bool
+}
+
 /// The core dynamic WFA structure for a lite implementation.
 /// It is structured such that all the sequences being built are maintained **outside** of this struct (hence the "lite").
 /// Essentially, it is keep the wavefront information, but all sequences are updated and tracked elsewhere.
@@ -70,13 +78,11 @@ impl DWFALite {
             return Err(DWFAError::AlreadyFinalized);
         }
 
-        // maximally extend everything along the current diagonals
-        self.extend(baseline_seq, other_seq)?;
-        
-        // check how it looks
-        while !self.reached_baseline_end(baseline_seq) && !self.reached_other_end(other_seq) {
+        // maximally extend everything along the current diagonals; extend() also reports the end checks
+        let mut reached = self.extend(baseline_seq, other_seq);
+        while !reached.baseline_end && !reached.other_end {
             // increase the edit distance, re-extension happens automatically
-            self.increase_edit_distance(baseline_seq, other_seq)?;
+            reached = self.increase_edit_distance(baseline_seq, other_seq)?;
         }
 
 
@@ -86,47 +92,49 @@ impl DWFALite {
     /// This will take the current wavefront and try to extend each one along it's current diagonal.
     /// In most cases, this will not do much work.
     /// This should also be stable such that calling it after finalizing has no impact.
+    /// Returns the end checks of the extended wavefront.
     /// # Arguments
     /// * `baseline_seq` - the baseline sequence
     /// * `other_seq` - the other sequence, typically getting updates
-    /// # Errors
-    /// * None so far
-    fn extend(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<(), DWFAError> {
-        // this is easier logic than trying to handle the option syntax below
+    fn extend(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Reached {
+        let edit_distance = self.edit_distance;
+        let (blen, olen) = (baseline_seq.len(), other_seq.len());
+        let mut reached = Reached::default();
         for (i, d) in self.wavefront.iter_mut().enumerate() {
             // `i` is the index in the wavefront
             // `i // 2` is always the middle diagonal
             // anything less than that has used more baseline symbols
             // anything more than that has used more other symbols
-            // anything above or below needs to shift the comparison
-
-            // for this particular wavefront, extend as far as possible
-            loop {
-                // example at edit distance 1:
-                // baseline offset would equal: [d+1, d, d-1] which corresponds to
-                // a skipped base in primary, equal usage, and a skipped base in other
-
-                // if we truncate a wavefront (e.g., a bounded size); then `i` below will be too small for every wavefront from the start
-                //     that gets truncated; this means we want the below formula to be `*d + self.edit_distance - (i + truncate_prefix)`
-                //     where `truncate_prefix` is the number we have cut off the front (in total).
-                //     IMPORTANT: this formula will need to get updated everywhere that `baseline_offset` is calculated
-
-                let baseline_offset = *d + self.edit_distance - i;
-                let other_offset = *d;
-                if baseline_offset >= baseline_seq.len() ||
-                    other_offset >= other_seq.len() ||
-                    baseline_seq[baseline_offset] != other_seq[other_offset] {
-                    // if we are past the end of either sequence OR
-                    // the sequences are not equal at this position THEN
-                    // we are done extending
+            // the baseline offset of diagonal `i` is `d + edit_distance - i`; the other offset is `d`
+            // if we truncate a wavefront (e.g., a bounded size); then `i` below will be too small for every wavefront from the start
+            //     that gets truncated; this means we want the below formula to be `*d + self.edit_distance - (i + truncate_prefix)`
+            //     where `truncate_prefix` is the number we have cut off the front (in total).
+            //     IMPORTANT: this formula will need to get updated everywhere that `baseline_offset` is calculated
+            let mut bo = *d + edit_distance - i;
+            let mut oo = *d;
+            // 8 bytes at a time; the first differing byte ends the extension (the same result as byte by byte)
+            while bo + 8 <= blen && oo + 8 <= olen {
+                let x = u64::from_le_bytes(baseline_seq[bo..bo + 8].try_into().unwrap()) ^
+                    u64::from_le_bytes(other_seq[oo..oo + 8].try_into().unwrap());
+                if x != 0 {
+                    let same = (x.trailing_zeros() / 8) as usize;
+                    bo += same;
+                    oo += same;
                     break;
                 }
-
-                // we are not done, so add one to this wavefront
-                *d += 1;
+                bo += 8;
+                oo += 8;
             }
+            while bo < blen && oo < olen && baseline_seq[bo] == other_seq[oo] {
+                bo += 1;
+                oo += 1;
+            }
+            *d = oo;
+            reached.baseline_end |= bo >= blen;
+            reached.other_end |= oo >= olen;
+            reached.full_diagonal |= bo >= blen && oo >= olen;
         }
-        Ok(())
+        reached
     }
 
     /// This will increase the edit distance for this DWFA and create a new larger wavefront.
@@ -137,7 +145,7 @@ impl DWFALite {
     /// # Errors
     /// * If the DWFA is already finalized
     /// * If we exceed the maximum edit distance
-    fn increase_edit_distance(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<(), DWFAError> {
+    fn increase_edit_distance(&mut self, baseline_seq: &[u8], other_seq: &[u8]) -> Result<Reached, DWFAError> {
         if self.is_finalized {
             return Err(DWFAError::AlreadyFinalized);
         }
@@ -148,28 +156,25 @@ impl DWFALite {
             return Err(DWFAError::MaxEditDistance);
         }
 
-        // create an empty new wavefront
-        let new_wf_len = self.wavefront.len() + 2;
-        let mut new_wavefront: Vec<usize> = vec![0; new_wf_len];
-
-        // now we need to populate the wavefront
-        for (i, &d) in self.wavefront.iter().enumerate() {
-            // deletion (skipping) of a base in `baseline_seq`; this does not change the distance into `other_seq`
-            new_wavefront[i] = new_wavefront[i].max(d);
-
-            // mismatch progresses both sequences
-            new_wavefront[i+1] = new_wavefront[i+1].max(d + 1);
-
-            // insertion of a base into `baseline_seq`; this progresses `other_seq`
-            new_wavefront[i+2] = new_wavefront[i+2].max(d + 1);
+        // new[k] = max(old[k] (deletion of a baseline base), old[k-1] + 1 (mismatch), old[k-2] + 1 (insertion));
+        // the same values as the scatter form of the original, written so that the middle loop vectorizes
+        let old = &self.wavefront;
+        let n = old.len();
+        let mut new_wavefront: Vec<usize> = Vec::with_capacity(n + 2);
+        new_wavefront.push(old[0]);
+        if n >= 2 {
+            new_wavefront.push(old[1].max(old[0] + 1));
+            new_wavefront.extend(old[2..].iter().zip(old[1..n - 1].iter()).zip(old[..n - 2].iter())
+                .map(|((&a, &b), &c)| a.max(b.max(c) + 1)));
+            new_wavefront.push(old[n - 1].max(old[n - 2]) + 1);
+        } else {
+            new_wavefront.push(old[0] + 1);
         }
-
-        // finally, save the new wavefront
+        new_wavefront.push(old[n - 1] + 1);
         self.wavefront = new_wavefront;
 
         // re-extend
-        self.extend(baseline_seq, other_seq)?;
-        Ok(())
+        Ok(self.extend(baseline_seq, other_seq))
     }
 
     /// This function is similar to `update(...)`, but it will perform all the final steps for an end-to-end calculation.
@@ -186,12 +191,12 @@ impl DWFALite {
         }
 
         // always try to extend before finalizing
-        self.extend(baseline_seq, other_seq)?;
+        let mut reached = self.extend(baseline_seq, other_seq);
 
         // now check where we are
-        while !self.reached_full_diagonal(baseline_seq, other_seq) {
+        while !reached.full_diagonal {
             // increase ED as long as we are not at the end of BOTH sequences
-            self.increase_edit_distance(baseline_seq, other_seq)?;
+            reached = self.increase_edit_distance(baseline_seq, other_seq)?;
         }
         self.is_finalized = true;
         Ok(())
