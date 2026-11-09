@@ -358,7 +358,7 @@ pub fn optimize_gt_alleles(
 }
 
 /// Tracks the current haplotypes in our branch-and-bound exploration of the query space
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ExactMatchNode {
     /// Unique node ID, primarily for deterministic, fixed order
     node_id: u64,
@@ -366,6 +366,15 @@ struct ExactMatchNode {
     hap_dwfa: HaplotypeDWFA,
     /// Tracks the number of errors (flips from ALT to REF on truth or query) so far in our exact matching path
     num_errors: usize
+}
+
+/// Hash by `node_id` alone. The derived `Eq` includes `node_id`, and the IDs of the nodes in the queue are
+/// unique, so this hash is consistent with `Eq` and gives the same queue behaviour as hashing the full state,
+/// which hashed the full haplotype sequences on every push.
+impl std::hash::Hash for ExactMatchNode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.node_id.hash(state);
+    }
 }
 
 /// Nice shortcut for coding; priority is (fewest flips, most set variants, smallest node index)

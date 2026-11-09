@@ -55,7 +55,6 @@ use anyhow::ensure;
 use log::debug;
 use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
-use std::hash::Hash;
 
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::phase_enums::{Allele, PhasedZygosity};
@@ -409,7 +408,7 @@ fn included_optional_count(variants: &[Variant], alleles: &[Allele]) -> usize {
 }
 
 /// Tracks the current haplotypes in our branch-and-bound exploration of the query space
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ComparisonNode {
     /// Unique node ID, primarily for deterministic, fixed order
     node_id: u64,
@@ -417,6 +416,15 @@ struct ComparisonNode {
     hap_dwfa1: HaplotypeDWFA,
     /// Haplotype 2 information
     hap_dwfa2: HaplotypeDWFA
+}
+
+/// Hash by `node_id` alone. The derived `Eq` includes `node_id`, and the IDs of the nodes in the queue are
+/// unique, so this hash is consistent with `Eq` and gives the same queue behaviour as hashing the full state,
+/// which hashed the full haplotype sequences on every push.
+impl std::hash::Hash for ComparisonNode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.node_id.hash(state);
+    }
 }
 
 /// Nice shortcut for coding; priority is (smallest cost from ED, smallest node index)
