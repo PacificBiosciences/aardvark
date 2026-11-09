@@ -120,7 +120,7 @@ impl VariantCategorizer {
             debug!("Opening {vcf_fn:?} for writing...");
 
             let file = File::create(&vcf_fn)?;
-            let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
+            let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 32)).unwrap();
             let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, file);
             let mut vcf_writer = vcf::io::Writer::new(bgzf_writer);
 

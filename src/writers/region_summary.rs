@@ -101,7 +101,7 @@ impl RegionSummaryWriter {
     pub fn new(filename: &Path, metrics_to_write: Vec<MetricsType>, threads: usize) -> csv::Result<Self> {
         // modify the delimiter to "," if it ends with .csv
         let delimiter: u8 = b'\t';
-        let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 4)).unwrap();
+        let w_threads = std::num::NonZeroUsize::new(threads.clamp(1, 32)).unwrap();
         let gzip_writer = bgzf::io::MultithreadedWriter::with_worker_count(w_threads, File::create(filename)?);
         let csv_writer= csv::WriterBuilder::new()
             .delimiter(delimiter)
