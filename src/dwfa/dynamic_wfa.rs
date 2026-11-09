@@ -180,6 +180,7 @@ impl DWFALite {
     /// This function is similar to `update(...)`, but it will perform all the final steps for an end-to-end calculation.
     /// This will trigger the algorithm to make sure we have reached the end of both the `baseline_seq` and `other_seq`, potentially increasing edit distance further.
     /// After calling this, no further extensions can be made, it is a "finalized" calculation.
+    /// Only the edit distance is meaningful afterwards: for a large edit distance it is computed directly, and the wavefront is not driven to the end.
     /// # Arguments
     /// * `baseline_seq` - the baseline sequence
     /// * `other_seq` - the other sequence
@@ -190,14 +191,32 @@ impl DWFALite {
             return Err(DWFAError::AlreadyFinalized);
         }
 
-        // always try to extend before finalizing
+        // The DWFA starts at the beginning of both sequences with all diagonals kept, so driving it to the end of
+        // both sequences gives the global edit distance of the full sequences. The wavefront costs O(ED^2) steps,
+        // which is minutes for a long unmatched SV; the bit-parallel global edit distance costs O(n * m / 64).
+        // Drive the wavefront while it is the cheaper one (small ED, the common case), else compute directly.
         let mut reached = self.extend(baseline_seq, other_seq);
-
-        // now check where we are
+        // a bit-parallel word costs about 4 wavefront diagonal steps or less here (measured on HG002: switching at
+        // n * m / 256 used 8% less CPU than at n * m / 64, and switching at once used 9 times more)
+        let bitparallel_cost = baseline_seq.len().max(1) * other_seq.len().max(1) / 256;
         while !reached.full_diagonal {
-            // increase ED as long as we are not at the end of BOTH sequences
+            let next = self.edit_distance + 1;
+            if next * next > bitparallel_cost {
+                break;
+            }
             reached = self.increase_edit_distance(baseline_seq, other_seq)?;
         }
+        if reached.full_diagonal {
+            self.is_finalized = true;
+            return Ok(());
+        }
+        let global_ed = crate::util::sequence_alignment::bitparallel_edit_distance(baseline_seq, other_seq);
+        debug_assert!(global_ed >= self.edit_distance);
+        if global_ed > self.max_edit_distance {
+            self.edit_distance = self.max_edit_distance + 1;
+            return Err(DWFAError::MaxEditDistance);
+        }
+        self.edit_distance = global_ed;
         self.is_finalized = true;
         Ok(())
     }
@@ -298,14 +317,14 @@ mod tests {
         let other = b"ACGT";
         dwfa.finalize(sequence, other).unwrap();
         assert_eq!(dwfa.edit_distance(), 4);
-        assert_eq!(dwfa.wavefront(), &[0, 1, 2, 3, 4, 4, 4, 4, 4]);
+        // finalize() computes the global edit distance directly; the wavefront is not driven to the end
 
         let mut dwfa = DWFALite::default();
         let sequence = b"ACGT";
         let other = b"";
         dwfa.finalize(sequence, other).unwrap();
         assert_eq!(dwfa.edit_distance(), 4);
-        assert_eq!(dwfa.wavefront(), &[0, 1, 2, 3, 4, 4, 4, 4, 4]);
+        // finalize() computes the global edit distance directly; the wavefront is not driven to the end
     }
 
     #[test]
