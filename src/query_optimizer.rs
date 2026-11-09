@@ -54,6 +54,7 @@ assert_eq!(query_sequences.query_zygosity(), &truth_zygosity);
 use anyhow::ensure;
 use log::debug;
 use priority_queue::PriorityQueue;
+use rayon::prelude::*;
 use std::cmp::Reverse;
 
 use crate::data_types::coordinates::Coordinates;
@@ -201,58 +202,12 @@ pub fn optimize_sequences(
     // in testing, this just prevent exponential blowup from purely FP variants in query
     let mut bucket_counts = vec![0; total_variant_count+1];
 
-    // loop while our queue is not empty
-    while let Some((current_node, _priority)) = pqueue.pop() {
-        if current_node.total_cost() > best_ed {
-            // the cost of this node is worse than something already found, so skip it
-            continue;
-        }
+    // speculated expansions of large nodes, by (node ID, set alleles)
+    let mut speculated: rustc_hash::FxHashMap<(u64, usize), Expansion> = Default::default();
 
-        // check which variant we are on
-        let order_index = current_node.set_alleles();
-        if bucket_counts[order_index] == 0 {
-            debug!("Best path to {order_index} = {:?}, {} <?> {}, {} <?> {}",
-                current_node.priority(),
-                current_node.hap_dwfa1().truth_haplotype().sequence().len(),
-                current_node.hap_dwfa1().query_haplotype().sequence().len(),
-                current_node.hap_dwfa2().truth_haplotype().sequence().len(),
-                current_node.hap_dwfa2().query_haplotype().sequence().len()
-            );
-        }
-
-        // make sure we didn't fill our quota for this bucket size
-        if bucket_counts[order_index] >= max_branch_factor {
-            continue;
-        }
-        bucket_counts[order_index] += 1;
-
-        if order_index == total_variant_count {
-            // we did every variant, time to finalize the node
-            let mut final_node = current_node;
-            final_node.finalize_dwfas(reference, coordinates.end() as usize)?;
-
-            // if our cost is less, this is a better solution
-            // equal cost keeps the solution that includes fewer optional alleles
-            let final_cost = final_node.total_cost();
-            let optional_included = included_optional_count(truth_variants, final_node.hap_dwfa1().truth_haplotype().alleles())
-                + included_optional_count(query_variants, final_node.hap_dwfa1().query_haplotype().alleles());
-            match final_cost.cmp(&best_ed).then(optional_included.cmp(&best_optional_included)) {
-                std::cmp::Ordering::Less => {
-                    // lower edit distance, or the same distance with fewer optional alleles
-                    best_ed = final_cost;
-                    best_optional_included = optional_included;
-                    best_results = vec![final_node];
-                },
-                std::cmp::Ordering::Equal => {
-                    // equal to previously found result
-                    best_results.push(final_node);
-                },
-                std::cmp::Ordering::Greater => {},
-            };
-            continue;
-        }
-
-        // now get the relevant variant info depending on truth/query
+    // the children of a node for its next variant (without new IDs); a pure function of the node
+    let expand = |node: ComparisonNode| -> Expansion {
+        let order_index = node.set_alleles();
         let (variant_index, is_truth) = all_variant_order[order_index];
         let (current_variant, current_zyg) = if is_truth {
             (&truth_variants[variant_index], truth_zygosity[variant_index])
@@ -298,26 +253,132 @@ pub fn optimize_sequences(
             extensions.push((Allele::Excluded, Allele::Excluded));
         }
 
-        // if there is only one extension, we can just extend in place
         if extensions.len() == 1 {
+            // one extension: extend the node in place
             let (allele1, allele2) = extensions[0];
-            let mut new_node = current_node;
-            new_node.extend_variant(
-                reference, is_truth,
-                current_variant, allele1, allele2, sync_extension
-            )?;
-            let new_priority = new_node.priority();
-            pqueue.push(new_node, new_priority);
+            let mut new_node = node;
+            let child = new_node.extend_variant(reference, is_truth, current_variant, allele1, allele2, sync_extension)
+                .map(|_| new_node);
+            return Expansion { single: true, children: vec![child] };
+        }
+        let extend_one = |&(allele1, allele2): &(Allele, Allele)| -> anyhow::Result<ComparisonNode> {
+            let mut new_node = node.clone();
+            new_node.extend_variant(reference, is_truth, current_variant, allele1, allele2, sync_extension)?;
+            Ok(new_node)
+        };
+        let children: Vec<anyhow::Result<ComparisonNode>> = if node.is_large() {
+            // the children are independent: extend them in parallel, keep their order
+            extensions.par_iter().map(extend_one).collect()
         } else {
-            // multiple extension, so we need to create new nodes for each
-            for (allele1, allele2) in extensions {
-                let mut new_node = current_node.clone();
+            extensions.iter().map(extend_one).collect()
+        };
+        Expansion { single: false, children }
+    };
+
+    // loop while our queue is not empty
+    while let Some((current_node, _priority)) = pqueue.pop() {
+        if current_node.total_cost() > best_ed {
+            // the cost of this node is worse than something already found, so skip it
+            speculated.remove(&(current_node.node_id, current_node.set_alleles()));
+            continue;
+        }
+
+        // check which variant we are on
+        let order_index = current_node.set_alleles();
+        if bucket_counts[order_index] == 0 {
+            debug!("Best path to {order_index} = {:?}, {} <?> {}, {} <?> {}",
+                current_node.priority(),
+                current_node.hap_dwfa1().truth_haplotype().sequence().len(),
+                current_node.hap_dwfa1().query_haplotype().sequence().len(),
+                current_node.hap_dwfa2().truth_haplotype().sequence().len(),
+                current_node.hap_dwfa2().query_haplotype().sequence().len()
+            );
+        }
+
+        // make sure we didn't fill our quota for this bucket size
+        if bucket_counts[order_index] >= max_branch_factor {
+            speculated.remove(&(current_node.node_id, order_index));
+            continue;
+        }
+        bucket_counts[order_index] += 1;
+
+        if order_index == total_variant_count {
+            // we did every variant, time to finalize the node
+            let mut final_node = current_node;
+            final_node.finalize_dwfas(reference, coordinates.end() as usize)?;
+
+            // if our cost is less, this is a better solution
+            // equal cost keeps the solution that includes fewer optional alleles
+            let final_cost = final_node.total_cost();
+            let optional_included = included_optional_count(truth_variants, final_node.hap_dwfa1().truth_haplotype().alleles())
+                + included_optional_count(query_variants, final_node.hap_dwfa1().query_haplotype().alleles());
+            match final_cost.cmp(&best_ed).then(optional_included.cmp(&best_optional_included)) {
+                std::cmp::Ordering::Less => {
+                    // lower edit distance, or the same distance with fewer optional alleles
+                    best_ed = final_cost;
+                    best_optional_included = optional_included;
+                    best_results = vec![final_node];
+                },
+                std::cmp::Ordering::Equal => {
+                    // equal to previously found result
+                    best_results.push(final_node);
+                },
+                std::cmp::Ordering::Greater => {},
+            };
+            continue;
+        }
+
+        // the children of this node: speculated ahead (large nodes, see below) or computed now
+        let key = (current_node.node_id, order_index);
+        let expansion = match speculated.remove(&key) {
+            Some(e) => e,
+            None if current_node.is_large() => {
+                // Speculation: expanding a node depends only on the node itself, so expand the next nodes of the
+                // queue in parallel now. They go back into the queue unchanged (unique priorities, so the same
+                // order), and the loop uses their stored expansions when it reaches them; child IDs are assigned
+                // there, as before. Nodes that will be skipped anyway are left out.
+                const SPECULATE: usize = 16;
+                let mut others: Vec<(ComparisonNode, NodePriority)> = Vec::with_capacity(SPECULATE - 1);
+                while others.len() < SPECULATE - 1 {
+                    match pqueue.pop() {
+                        Some(entry) => others.push(entry),
+                        None => break
+                    }
+                }
+                let mut keys: Vec<(u64, usize)> = vec![key];
+                let mut batch: Vec<ComparisonNode> = vec![current_node];
+                for (n, _) in others.iter() {
+                    let oi = n.set_alleles();
+                    if oi < total_variant_count && n.total_cost() <= best_ed && bucket_counts[oi] < max_branch_factor &&
+                        n.is_large() && !speculated.contains_key(&(n.node_id, oi)) {
+                        keys.push((n.node_id, oi));
+                        batch.push(n.clone());
+                    }
+                }
+                let mut expansions: Vec<Expansion> = batch.into_par_iter().map(expand).collect();
+                for (k, e) in keys.iter().skip(1).zip(expansions.drain(1..)) {
+                    speculated.insert(*k, e);
+                }
+                for (n, p) in others {
+                    pqueue.push(n, p);
+                }
+                expansions.pop().unwrap()
+            },
+            None => expand(current_node)
+        };
+        if expansion.single {
+            // one extension: the node is extended in place and keeps its ID
+            for new_node in expansion.children {
+                let new_node = new_node?;
+                let new_priority = new_node.priority();
+                pqueue.push(new_node, new_priority);
+            }
+        } else {
+            // multiple extensions: new nodes with new IDs, in order
+            for new_node in expansion.children {
+                let mut new_node = new_node?;
                 new_node.set_node_id(next_node_id);
                 next_node_id += 1;
-                new_node.extend_variant(
-                    reference, is_truth,
-                    current_variant, allele1, allele2, sync_extension
-                )?;
                 let new_priority = new_node.priority();
                 pqueue.push(new_node, new_priority);
             }
@@ -407,6 +468,13 @@ fn included_optional_count(variants: &[Variant], alleles: &[Allele]) -> usize {
         .count()
 }
 
+/// The children of a node for its next variant, in the order of the extensions; `single` if there is one extension
+/// (the child keeps the ID of its parent), else the children get new IDs when they are used.
+struct Expansion {
+    single: bool,
+    children: Vec<anyhow::Result<ComparisonNode>>
+}
+
 /// Tracks the current haplotypes in our branch-and-bound exploration of the query space
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ComparisonNode {
@@ -459,10 +527,27 @@ impl ComparisonNode {
         reference: &[u8], is_truth: bool,
         variant: &Variant, allele1: Allele, allele2: Allele, sync_extension: Option<usize>
     ) -> anyhow::Result<bool> {
-        let mut both_extended = true;
-        both_extended &= self.hap_dwfa1.extend_variant(reference, is_truth, variant, allele1, sync_extension)?;
-        both_extended &= self.hap_dwfa2.extend_variant(reference, is_truth, variant, allele2, sync_extension)?;
-        Ok(both_extended)
+        let (r1, r2) = if self.is_large() {
+            // the two haplotypes are independent; for large wavefronts (ms per update) run them in parallel
+            let (hap_dwfa1, hap_dwfa2) = (&mut self.hap_dwfa1, &mut self.hap_dwfa2);
+            rayon::join(
+                || hap_dwfa1.extend_variant(reference, is_truth, variant, allele1, sync_extension),
+                || hap_dwfa2.extend_variant(reference, is_truth, variant, allele2, sync_extension)
+            )
+        } else {
+            let r1 = self.hap_dwfa1.extend_variant(reference, is_truth, variant, allele1, sync_extension);
+            if r1.is_err() {
+                return Ok(r1?);
+            }
+            (r1, self.hap_dwfa2.extend_variant(reference, is_truth, variant, allele2, sync_extension))
+        };
+        Ok(r1? & r2?)
+    }
+
+    /// True if an update of this node is expensive enough (a large wavefront) to run its parts in parallel
+    fn is_large(&self) -> bool {
+        const PARALLEL_MIN_DIAGONALS: usize = 4096;
+        self.hap_dwfa1.wavefront_len().max(self.hap_dwfa2.wavefront_len()) >= PARALLEL_MIN_DIAGONALS
     }
 
     /// Finalizes the DWFAs, nothing can get added after calling this
@@ -471,8 +556,18 @@ impl ComparisonNode {
     /// * `region_end` - needed to determine how far our region extends out to
     pub fn finalize_dwfas(&mut self, reference: &[u8], region_end: usize) -> anyhow::Result<()> {
         // update each DWFA, translate errors to anyhow
-        self.hap_dwfa1.finalize_dwfa(reference, region_end)?;
-        self.hap_dwfa2.finalize_dwfa(reference, region_end)?;
+        if self.is_large() {
+            let (hap_dwfa1, hap_dwfa2) = (&mut self.hap_dwfa1, &mut self.hap_dwfa2);
+            let (r1, r2) = rayon::join(
+                || hap_dwfa1.finalize_dwfa(reference, region_end),
+                || hap_dwfa2.finalize_dwfa(reference, region_end)
+            );
+            r1?;
+            r2?;
+        } else {
+            self.hap_dwfa1.finalize_dwfa(reference, region_end)?;
+            self.hap_dwfa2.finalize_dwfa(reference, region_end)?;
+        }
         Ok(())
     }
 

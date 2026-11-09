@@ -1,6 +1,7 @@
 # Unreleased
 ## Changes
 - `compare` computes the final edit distance of a region with a bit-parallel algorithm when the wavefront would be expensive. A long unmatched SV no longer takes minutes (HG002 chr8 region with a 38 kbp insertion: 554 s to 5 s). Results are unchanged.
+- `compare` expands large search nodes in parallel: the children and both haplotypes of a node, and the next nodes of the queue ahead of time. The search order and the results are unchanged; the slowest HG002 region drops from 131 s to 57 s.
 
 ## Fixed
 - Alleles longer than 10 kbp were ignored without a warning (only a debug log line), so long SVs were missing from every metric. The limit is now 1 Mbp.

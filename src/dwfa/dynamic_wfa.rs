@@ -290,6 +290,11 @@ impl DWFALite {
     }
 
     // Getters below
+    /// The number of diagonals in the wavefront (2 * edit distance + 1); a measure of the cost of the next steps
+    pub fn wavefront_len(&self) -> usize {
+        self.wavefront.len()
+    }
+
     pub fn edit_distance(&self) -> usize {
         self.edit_distance
     }

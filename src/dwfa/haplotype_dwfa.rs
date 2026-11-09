@@ -111,6 +111,11 @@ impl HaplotypeDWFA {
             self.truth_haplotype.ref_pos() == self.query_haplotype.ref_pos()
     }
 
+    /// The number of diagonals of the underlying DWFA; a measure of the cost of the next update
+    pub fn wavefront_len(&self) -> usize {
+        self.dwfa.wavefront_len()
+    }
+
     /// Edit distance from the underlying DWFA.
     pub fn edit_distance(&self) -> usize {
         self.dwfa.edit_distance()
