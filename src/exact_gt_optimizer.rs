@@ -42,15 +42,15 @@ assert_eq!(result.query_alleles(), &query_alleles);
 
 use anyhow::bail;
 use log::{debug, trace};
-use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::phase_enums::Allele;
 use crate::data_types::variants::Variant;
 use crate::dwfa::haplotype_dwfa::{HapDWFAError, HaplotypeDWFA};
 use crate::query_optimizer::order_variants;
+use crate::util::priority_entry::PriorityEntry;
 
 /// Result from our exact sequence optimization routine
 #[derive(Debug, Eq, PartialEq)]
@@ -141,8 +141,8 @@ pub fn optimize_gt_alleles(
 
     // put it into the queue as our seed node
     let priority = root_node.priority();
-    let mut pqueue: PriorityQueue<ExactMatchNode, NodePriority> = Default::default();
-    pqueue.push(root_node, priority);
+    let mut pqueue: BinaryHeap<PriorityEntry<NodePriority, ExactMatchNode>> = BinaryHeap::new();
+    pqueue.push(PriorityEntry::new(priority, root_node));
 
     // set our best to max ED with no result
     let mut best_error_count = usize::MAX;
@@ -165,7 +165,8 @@ pub fn optimize_gt_alleles(
     let start = std::time::Instant::now();
 
     // loop while our queue is not empty
-    while let Some((current_node, _priority)) = pqueue.pop() {
+    while let Some(entry) = pqueue.pop() {
+        let (_priority, current_node) = entry.into_parts();
         if current_node.num_errors() >= best_error_count {
             // the cost of this node is not better than something already found, so skip it
             continue;
@@ -225,8 +226,9 @@ pub fn optimize_gt_alleles(
             );
             debug!("Current queue size: {}", pqueue.len());
             let mut queue_stats: BTreeMap<(usize, usize), usize> = Default::default();
-            for (n, _) in pqueue.iter() {
-                let k = (n.set_alleles(), n.num_errors());
+            for entry in pqueue.iter() {
+                let node = entry.node();
+                let k = (node.set_alleles(), node.num_errors());
                 *queue_stats.entry(k).or_default() += 1;
             }
             for (k, v) in queue_stats.iter() {
@@ -267,7 +269,7 @@ pub fn optimize_gt_alleles(
                 
                 if success && new_node.is_exact_match() {
                     let new_priority = new_node.priority();
-                    pqueue.push(new_node, new_priority);
+                    pqueue.push(PriorityEntry::new(new_priority, new_node));
                 } else {
                     *failed_counts.entry(order_index).or_default() += 1;
                 }
@@ -299,7 +301,7 @@ pub fn optimize_gt_alleles(
                     // only add 
                     if success && new_node.is_exact_match() {
                         let new_priority = new_node.priority();
-                        pqueue.push(new_node, new_priority);
+                        pqueue.push(PriorityEntry::new(new_priority, new_node));
                     } else {
                         *failed_counts.entry(order_index).or_default() += 1;
                     }
@@ -312,23 +314,22 @@ pub fn optimize_gt_alleles(
         if auto_fail_counts >= auto_fail_threshold {
             let (auto_fail_sub_index, auto_fail_is_truth) = all_variant_order[auto_fail_index];
             let before_size = pqueue.len();
-            pqueue = pqueue.into_iter()
-                .filter(|(node, _priority)| {
-                    let alleles = if auto_fail_is_truth {
-                        node.hap_dwfa().truth_haplotype().alleles()
-                    } else {
-                        node.hap_dwfa().query_haplotype().alleles()
-                    };
+            pqueue.retain(|entry| {
+                let alleles = if auto_fail_is_truth {
+                    entry.node().hap_dwfa().truth_haplotype().alleles()
+                } else {
+                    entry.node().hap_dwfa().query_haplotype().alleles()
+                };
 
-                    let allele = if auto_fail_sub_index < alleles.len() {
-                        alleles[auto_fail_sub_index]
-                    } else {
-                        Allele::Reference
-                    };
+                let allele = if auto_fail_sub_index < alleles.len() {
+                    alleles[auto_fail_sub_index]
+                } else {
+                    Allele::Reference
+                };
 
-                    // only keep Reference, or an Excluded allele that was never a candidate
-                    allele == Allele::Reference || allele == Allele::Excluded
-                }).collect();
+                // only keep Reference, or an Excluded allele that was never a candidate
+                allele == Allele::Reference || allele == Allele::Excluded
+            });
 
             // debug messaging
             let after_size = pqueue.len();

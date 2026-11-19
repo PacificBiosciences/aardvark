@@ -1,7 +1,7 @@
 [
   {
     "name": "aardvark-bio",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "authors": "holtjma <mholt@pacificbiosciences.com>",
     "repository": "https://github.com/PacificBiosciences/aardvark",
     "license": "MIT",
@@ -43,6 +43,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Minimal Android system properties wrapper"
+  },
+  {
+    "name": "anes",
+    "version": "0.1.6",
+    "authors": "Robert Vojta <rvojta@me.com>",
+    "repository": "https://github.com/zrzka/anes-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "ANSI Escape Sequences provider & parser"
   },
   {
     "name": "anstream",
@@ -234,6 +243,15 @@
     "description": "Types and traits for working with bytes"
   },
   {
+    "name": "cast",
+    "version": "0.3.0",
+    "authors": "Jorge Aparicio <jorge@japaric.io>",
+    "repository": "https://github.com/japaric/cast.rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Ergonomic, checked cast functions for primitive types"
+  },
+  {
     "name": "cc",
     "version": "1.2.17",
     "authors": "Alex Crichton <alex@alexcrichton.com>",
@@ -259,6 +277,33 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Date and time library for Rust"
+  },
+  {
+    "name": "ciborium",
+    "version": "0.2.2",
+    "authors": "Nathaniel McCallum <npmccallum@profian.com>",
+    "repository": "https://github.com/enarx/ciborium",
+    "license": "Apache-2.0",
+    "license_file": null,
+    "description": "serde implementation of CBOR using ciborium-basic"
+  },
+  {
+    "name": "ciborium-io",
+    "version": "0.2.2",
+    "authors": "Nathaniel McCallum <npmccallum@profian.com>",
+    "repository": "https://github.com/enarx/ciborium",
+    "license": "Apache-2.0",
+    "license_file": null,
+    "description": "Simplified Read/Write traits for no_std usage"
+  },
+  {
+    "name": "ciborium-ll",
+    "version": "0.2.2",
+    "authors": "Nathaniel McCallum <npmccallum@profian.com>",
+    "repository": "https://github.com/enarx/ciborium",
+    "license": "Apache-2.0",
+    "license_file": null,
+    "description": "Low-level CBOR codec primitives"
   },
   {
     "name": "clap",
@@ -342,6 +387,24 @@
     "description": "Fast, SIMD-accelerated CRC32 (IEEE) checksum computation"
   },
   {
+    "name": "criterion",
+    "version": "0.5.1",
+    "authors": "Jorge Aparicio <japaricious@gmail.com>|Brook Heisler <brookheisler@gmail.com>",
+    "repository": "https://github.com/bheisler/criterion.rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Statistics-driven micro-benchmarking library"
+  },
+  {
+    "name": "criterion-plot",
+    "version": "0.5.0",
+    "authors": "Jorge Aparicio <japaricious@gmail.com>|Brook Heisler <brookheisler@gmail.com>",
+    "repository": "https://github.com/bheisler/criterion.rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Criterion's plotting library"
+  },
+  {
     "name": "crossbeam-channel",
     "version": "0.5.15",
     "authors": null,
@@ -376,6 +439,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Utilities for concurrent programming"
+  },
+  {
+    "name": "crunchy",
+    "version": "0.2.4",
+    "authors": "Eira Fransham <jackefransham@gmail.com>",
+    "repository": "https://github.com/eira-fransham/crunchy",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Crunchy unroller: deterministically unroll constant loops"
   },
   {
     "name": "csv",
@@ -612,6 +684,15 @@
     "description": "A small cross-platform library for retrieving random data from system source"
   },
   {
+    "name": "half",
+    "version": "2.7.1",
+    "authors": "Kathryn Long <squeeself@gmail.com>",
+    "repository": "https://github.com/VoidStarKat/half-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Half-precision floating point f16 and bf16 types for Rust implementing the IEEE 754-2008 standard binary16 and bfloat16 types."
+  },
+  {
     "name": "hashbrown",
     "version": "0.15.2",
     "authors": "Amanieu d'Antras <amanieu@gmail.com>",
@@ -637,6 +718,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "heck is a case conversion library."
+  },
+  {
+    "name": "hermit-abi",
+    "version": "0.5.3",
+    "authors": null,
+    "repository": "https://github.com/hermit-os/hermit-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Hermit system calls definitions."
   },
   {
     "name": "iana-time-zone",
@@ -684,6 +774,15 @@
     "description": "A progress bar and cli reporting library for Rust"
   },
   {
+    "name": "is-terminal",
+    "version": "0.4.17",
+    "authors": "softprops <d.tangren@gmail.com>|Dan Gohman <dev@sunfishcode.online>",
+    "repository": "https://github.com/sunfishcode/is-terminal",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Test whether a given stream is a terminal"
+  },
+  {
     "name": "is_terminal_polyfill",
     "version": "1.70.1",
     "authors": null,
@@ -691,6 +790,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Polyfill for `is_terminal` stdlib feature for use with older MSRVs"
+  },
+  {
+    "name": "itertools",
+    "version": "0.10.5",
+    "authors": "bluss",
+    "repository": "https://github.com/rust-itertools/itertools",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Extra iterator adaptors, iterator methods, free functions, and macros."
   },
   {
     "name": "itertools",
@@ -1080,6 +1188,15 @@
     "description": "Single assignment cells and lazy values."
   },
   {
+    "name": "oorandom",
+    "version": "11.1.5",
+    "authors": "Simon Heath <icefox@dreamquest.io>",
+    "repository": "https://hg.sr.ht/~icefox/oorandom",
+    "license": "MIT",
+    "license_file": null,
+    "description": "A tiny, robust PRNG implementation."
+  },
+  {
     "name": "ordered-float",
     "version": "3.9.2",
     "authors": "Jonathan Reem <jonathan.reem@gmail.com>|Matt Brubeck <mbrubeck@limpet.net>",
@@ -1116,6 +1233,33 @@
     "description": "Graph data structure library. Provides graph types and graph algorithms."
   },
   {
+    "name": "plotters",
+    "version": "0.3.7",
+    "authors": "Hao Hou <haohou302@gmail.com>",
+    "repository": "https://github.com/plotters-rs/plotters",
+    "license": "MIT",
+    "license_file": null,
+    "description": "A Rust drawing library focus on data plotting for both WASM and native applications"
+  },
+  {
+    "name": "plotters-backend",
+    "version": "0.3.7",
+    "authors": "Hao Hou <haohou302@gmail.com>",
+    "repository": "https://github.com/plotters-rs/plotters",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Plotters Backend API"
+  },
+  {
+    "name": "plotters-svg",
+    "version": "0.3.7",
+    "authors": "Hao Hou <haohou302@gmail.com>",
+    "repository": "https://github.com/plotters-rs/plotters.git",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Plotters SVG backend"
+  },
+  {
     "name": "portable-atomic",
     "version": "1.11.0",
     "authors": null,
@@ -1150,15 +1294,6 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Cross-platform cryptography-oriented low-level SIMD library."
-  },
-  {
-    "name": "priority-queue",
-    "version": "2.3.1",
-    "authors": "Gianmarco Garrisi <gianmarcogarrisi@tutanota.com>",
-    "repository": "https://github.com/garro95/priority-queue",
-    "license": "LGPL-3.0-or-later OR MPL-2.0",
-    "license_file": null,
-    "description": "A Priority Queue implemented as a heap with a function to efficiently change the priority of an item."
   },
   {
     "name": "proc-macro2",
@@ -1330,6 +1465,15 @@
     "license": "Apache-2.0 OR MIT OR Zlib",
     "license_file": null,
     "description": "Crate that exposes `core::arch` safely via `#[cfg()]`."
+  },
+  {
+    "name": "same-file",
+    "version": "1.0.6",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/same-file",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "A simple crate for determining whether two file paths point to the same file."
   },
   {
     "name": "semver",
@@ -1557,6 +1701,15 @@
     "description": "Procedural macros for the time crate.     This crate is an implementation detail and should not be relied upon directly."
   },
   {
+    "name": "tinytemplate",
+    "version": "1.2.1",
+    "authors": "Brook Heisler <brookheisler@gmail.com>",
+    "repository": "https://github.com/bheisler/TinyTemplate",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Simple, lightweight template engine"
+  },
+  {
     "name": "triple_accel",
     "version": "0.4.0",
     "authors": "c0deb0t <daniel.liu02@gmail.com>",
@@ -1638,6 +1791,15 @@
     "description": "Common code used to support the vergen libraries"
   },
   {
+    "name": "walkdir",
+    "version": "2.5.0",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/walkdir",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "Recursively walk a directory."
+  },
+  {
     "name": "wasi",
     "version": "0.11.0+wasi-snapshot-preview1",
     "authors": "The Cranelift Project Developers",
@@ -1692,6 +1854,15 @@
     "description": "Shared support between wasm-bindgen and wasm-bindgen cli, an internal dependency."
   },
   {
+    "name": "web-sys",
+    "version": "0.3.77",
+    "authors": "The wasm-bindgen Developers",
+    "repository": "https://github.com/rustwasm/wasm-bindgen/tree/master/crates/web-sys",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Bindings for all Web APIs, a procedurally generated crate from WebIDL"
+  },
+  {
     "name": "web-time",
     "version": "1.1.0",
     "authors": null,
@@ -1708,6 +1879,15 @@
     "license": "Apache-2.0 OR MIT OR Zlib",
     "license_file": null,
     "description": "A crate to help you go wide."
+  },
+  {
+    "name": "winapi-util",
+    "version": "0.1.11",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/winapi-util",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "A dumping ground for high level safe wrappers over windows-sys."
   },
   {
     "name": "windows-core",
@@ -1855,8 +2035,8 @@
   },
   {
     "name": "zerocopy",
-    "version": "0.8.24",
-    "authors": "Joshua Liebow-Feeser <joshlf@google.com>|Jack Wrenn <jswrenn@amazon.com>",
+    "version": "0.8.63",
+    "authors": null,
     "repository": "https://github.com/google/zerocopy",
     "license": "Apache-2.0 OR BSD-2-Clause OR MIT",
     "license_file": null,
@@ -1864,8 +2044,8 @@
   },
   {
     "name": "zerocopy-derive",
-    "version": "0.8.24",
-    "authors": "Joshua Liebow-Feeser <joshlf@google.com>|Jack Wrenn <jswrenn@amazon.com>",
+    "version": "0.8.63",
+    "authors": null,
     "repository": "https://github.com/google/zerocopy",
     "license": "Apache-2.0 OR BSD-2-Clause OR MIT",
     "license_file": null,

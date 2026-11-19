@@ -1,6 +1,6 @@
 [package]
 name = "aardvark-bio"
-version = "1.1.0"
+version = "1.2.0"
 authors = ["holtjma <mholt@pacificbiosciences.com>"]
 edition = "2021"
 license = "MIT"
@@ -29,7 +29,6 @@ lazy_static = "1.5.0"
 log = "0.4.27"
 noodles = { version = "0.100.0", features = ["bed", "bgzf", "core", "tabix", "vcf"] }
 noodles-util = { version = "0.69.0", features = ["variant"] }
-priority-queue = "2.3.1"
 rayon = "1.10.0"
 rust-lib-reference-genome = "0.2.1"
 rustc-hash = "2.1.1"
@@ -41,6 +40,11 @@ thiserror = "2.0.12"
 
 [dev-dependencies]
 approx_eq = "0.1.8"
+criterion = "0.5.1"
+
+[[bench]]
+name = "compare_bench"
+harness = false
 
 [profile.release]
 lto = "fat"

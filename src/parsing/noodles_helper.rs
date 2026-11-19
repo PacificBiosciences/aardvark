@@ -4,7 +4,6 @@ use indexmap::IndexMap;
 use log::debug;
 use noodles::bed::io::reader::Builder as BedBuilder;
 use noodles::bed::{io::Reader as BedReader, Record as BedRecord};
-use noodles::core::region::Interval;
 use std::io::BufReader;
 use std::path::Path;
 
@@ -12,6 +11,14 @@ use std::path::Path;
 /// # Arguments
 /// * `filename` - path to the .bed(.gz) file to open
 pub fn open_bed_file(filename: &Path) -> anyhow::Result<BedReader<3, BufReader<Box<dyn std::io::Read>>>> {
+    open_bed_file_with_inflaters(filename, 0)
+}
+
+/// Wrapper function that handles both gzip compressed and uncompressed BED files.
+/// # Arguments
+/// * `filename` - path to the .bed(.gz) file to open
+/// * `inflate_workers` - extra BGZF inflate threads for a compressed file; 0 uses the single-threaded reader
+pub fn open_bed_file_with_inflaters(filename: &Path, inflate_workers: usize) -> anyhow::Result<BedReader<3, BufReader<Box<dyn std::io::Read>>>> {
     let is_compressed = match filename.extension() {
         Some(extension) => {
             extension == "gz"
@@ -19,7 +26,13 @@ pub fn open_bed_file(filename: &Path) -> anyhow::Result<BedReader<3, BufReader<B
         None => false
     };
 
-    let buf_reader: Box<dyn std::io::Read> = if is_compressed {
+    let buf_reader: Box<dyn std::io::Read> = if is_compressed && inflate_workers > 0 {
+        let file = std::fs::File::open(filename)
+            .with_context(|| format!("Error while loading {filename:?}:"))?;
+        let workers = std::num::NonZeroUsize::new(inflate_workers).unwrap();
+        let bgzf_reader = noodles::bgzf::io::MultithreadedReader::with_worker_count(workers, file);
+        Box::new(bgzf_reader)
+    } else if is_compressed {
         #[allow(clippy::default_constructed_unit_structs)]
         let bgzf_reader = noodles::bgzf::io::reader::Builder::default()
             .build_from_path(filename)
@@ -37,8 +50,9 @@ pub fn open_bed_file(filename: &Path) -> anyhow::Result<BedReader<3, BufReader<B
 
 /// A pre-loaded BED file where chromosome order is supported and the intervals are sorted.
 pub struct LoadedBed {
-    /// Map from chromosome to the sorted intervals
-    chrom_lookup: IndexMap<String, Vec<Interval>>
+    /// Map from chromosome to the sorted 0-based inclusive intervals
+    /// COI intervals are stored so they can be directly loaded into a COI tree, if needed.
+    chrom_lookup: IndexMap<String, Vec<coitrees::Interval<()>>>
 }
 
 impl LoadedBed {
@@ -46,35 +60,60 @@ impl LoadedBed {
     /// # Arguments
     /// * `filename` - path to the .bed(.gz) file to open
     pub fn preload_bed_file(filename: &Path) -> anyhow::Result<Self> {
+        Self::preload_bed_file_with_inflaters(filename, 0)
+    }
+
+    /// This will load an entire BED file into memory, preserving chromosome order but also sorting any intervals if they are not sorted already.
+    /// # Arguments
+    /// * `filename` - path to the .bed(.gz) file to open
+    /// * `inflate_workers` - extra BGZF inflate threads for a compressed file; 0 uses the single-threaded reader
+    pub fn preload_bed_file_with_inflaters(filename: &Path, inflate_workers: usize) -> anyhow::Result<Self> {
         // open the file
         debug!("Pre-loading {filename:?}...");
-        let mut bed_handle = open_bed_file(filename)?;
+        let mut bed_handle = open_bed_file_with_inflaters(filename, inflate_workers)?;
 
         // we need to build more regions
         let mut record = BedRecord::<3>::default();
-        let mut chrom_lookup: IndexMap<String, Vec<Interval>> = Default::default();
+        let mut chrom_lookup: IndexMap<String, Vec<coitrees::Interval<()>>> = Default::default();
+        let mut current_chrom_index: usize = 0;
         while bed_handle.read_record(&mut record)? > 0 {
             // BED records are 0-based exclusive end; e.g. [1000, 1100)
-            // Intervals are 1-based inclusive; e.g. [1001, 1100]
-            // Thus, the starts will appear off-by-one downstream of here if we are using tradition Rust ranges
-            let chrom = record.reference_sequence_name().to_string();
+            // COI intervals are 0-based inclusive; e.g. [1000, 1099]
             let start = record.feature_start()
                 .with_context(|| format!("Error while parsing start for record: {record:?}"))?;
             let end = record.feature_end()
                 .unwrap_or(Err(std::io::Error::other("Missing end")))
                 .with_context(|| format!("Error while parsing end for record: {record:?}"))?;
-            let interval = Interval::from(start..=end);
+            let interval = coitrees::Interval::new(
+                start.get() as i32 - 1, end.get() as i32 - 1, ()
+            );
 
-            let entry = chrom_lookup.entry(chrom.clone()).or_default();
-            entry.push(interval);
+            // keep the chromosome index while consecutive records share a name
+            let name = record.reference_sequence_name();
+            let name_bytes: &[u8] = name.as_ref();
+            let index = if chrom_lookup.get_index(current_chrom_index).is_some_and(|(key, _)| key.as_bytes() == name_bytes) {
+                current_chrom_index
+            } else {
+                match chrom_lookup.get_index_of(name) {
+                    Some(index) => index,
+                    None => chrom_lookup.insert_full(name.to_string(), Vec::new()).0,
+                }
+            };
+            current_chrom_index = index;
+
+            // now add the interval to the chromosome
+            chrom_lookup.get_index_mut(index)
+                .expect("chromosome index was just resolved")
+                .1
+                .push(interval);
         }
 
         // sort all the intervals
         for (chrom, interval_set) in chrom_lookup.iter_mut() {
             let num_entries = interval_set.len();
-            if !interval_set.is_sorted_by_key(|i| (i.start().unwrap(), i.end().unwrap())) {
+            if !interval_set.is_sorted_by_key(|i| (i.first, i.last)) {
                 debug!("Sorting {num_entries} BED entries for {chrom}...");
-                interval_set.sort_by_key(|i| (i.start().unwrap(), i.end().unwrap()));
+                interval_set.sort_by_key(|i| (i.first, i.last));
             } else {
                 debug!("Found {num_entries} sorted BED entries for {chrom}.");
             }
@@ -86,12 +125,17 @@ impl LoadedBed {
     }
 
     /// Get the entry as the specified index, returning both the chromosome (key) and the sorted interval set
-    pub fn get_index(&self, index: usize) -> Option<(&String, &Vec<Interval>)> {
+    pub fn get_index(&self, index: usize) -> Option<(&String, &Vec<coitrees::Interval<()>>)> {
         self.chrom_lookup.get_index(index)
     }
 
+    /// Consumes the BED and returns the chromosome map in file order.
+    pub fn into_chrom_lookup(self) -> IndexMap<String, Vec<coitrees::Interval<()>>> {
+        self.chrom_lookup
+    }
+
     // getters
-    pub fn chrom_lookup(&self) -> &IndexMap<String, Vec<Interval>> {
+    pub fn chrom_lookup(&self) -> &IndexMap<String, Vec<coitrees::Interval<()>>> {
         &self.chrom_lookup
     }
 }

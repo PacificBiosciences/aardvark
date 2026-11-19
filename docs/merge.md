@@ -8,7 +8,7 @@ Table of contents:
 
 * [Quickstart](#quickstart)
 * [Output files](#output-files)
-  * [Summary statistics file](#summary-statistics-file)
+  * [Merge summary file](#merge-summary-file)
   * [Debug folder](#debug-folder)
 * [Frequently asked questions](#frequently-asked-questions)
 

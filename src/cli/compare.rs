@@ -1,12 +1,28 @@
 
 use anyhow::{bail, ensure};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use log::info;
 use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::cli::core::{check_optional_filename, check_required_filename, AFTER_HELP, FULL_VERSION};
 use crate::parsing::noodles_helper::get_vcf_sample_name;
+use crate::parsing::region_generation::MAX_ALLELE_LENGTH;
+
+/// Bundled region-generation options for `compare`.
+/// Each preset sets only the flags named on that variant.
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+pub enum ComparePreset {
+    /// Targets small variants up to 50 bp
+    #[value(name = "small")]
+    Small,
+    /// Small variants and structural variants up to 10 kbp
+    #[value(name = "medium")]
+    Medium,
+    /// Structural variants of any length
+    #[value(name = "large")]
+    Large,
+}
 
 #[derive(Args, Clone, Default, Serialize)]
 #[clap(author, about, 
@@ -16,6 +32,13 @@ pub struct CompareSettings {
     #[clap(default_value = "")]
     #[clap(hide = true)]
     aardvark_version: String,
+
+    /// Preset options, see user guide for details.
+    #[clap(short = 'p')]
+    #[clap(long = "preset")]
+    #[clap(value_name = "PRESET")]
+    #[clap(value_enum)]
+    pub preset: Option<ComparePreset>,
 
     /// Reference FASTA file
     #[clap(required = true)]
@@ -183,11 +206,44 @@ pub struct CompareSettings {
     pub take_blocks: usize,
 }
 
+/// Overwrites the region-generation fields owned by the selected preset.
+/// # Arguments
+/// * `settings` - compare settings; updated in place when `preset` is set
+fn apply_compare_preset(settings: &mut CompareSettings) {
+    let Some(preset) = settings.preset else {
+        return;
+    };
+
+    // print the flags this preset sets, then apply them
+    info!("Preset: {preset:?}");
+    match preset {
+        ComparePreset::Small => {
+            info!("\t--soft-max-variant-length 50 --hard-max-variant-length 200");
+            settings.soft_max_variant_length = Some(50);
+            settings.hard_max_variant_length = Some(200);
+        },
+        ComparePreset::Medium => {
+            info!("\t--min-variant-gap 1000 --soft-max-variant-length 10000 --hard-max-variant-length 20000");
+            settings.min_variant_gap = 1000;
+            settings.soft_max_variant_length = Some(10_000);
+            settings.hard_max_variant_length = Some(20_000);
+        },
+        ComparePreset::Large => {
+            info!("\t--min-variant-gap 1000");
+            settings.min_variant_gap = 1000;
+        },
+    }
+}
+
 pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<CompareSettings> {
     // hard code the version in
     settings.aardvark_version = FULL_VERSION.clone();
     info!("Aardvark version: {:?}", settings.aardvark_version);
     info!("Sub-command: compare");
+
+    // apply a preset before the gap and length band are checked
+    apply_compare_preset(&mut settings);
+
     info!("Inputs:");
 
     // check for all the required input files
@@ -250,7 +306,7 @@ pub fn check_compare_settings(mut settings: CompareSettings) -> anyhow::Result<C
         (Some(soft_max), Some(hard_max)) => {
             ensure!(soft_max > 0, "--soft-max-variant-length must be > 0");
             ensure!(soft_max <= hard_max, "--soft-max-variant-length must be <= --hard-max-variant-length");
-            ensure!(hard_max <= 10000, "--hard-max-variant-length must be <= 10000");
+            ensure!(hard_max <= MAX_ALLELE_LENGTH, "--hard-max-variant-length must be <= {MAX_ALLELE_LENGTH}");
             info!("\tSoft max variant length: {soft_max}");
             info!("\tHard max variant length: {hard_max}");
         },

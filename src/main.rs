@@ -1,8 +1,9 @@
 
-use indicatif::{ParallelProgressIterator, ProgressIterator};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator};
 use log::{LevelFilter, debug, error, info, warn};
 use rayon::prelude::*;
 use rust_lib_reference_genome::reference_genome::ReferenceGenome;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use aardvark_bio::cli::compare::{CompareSettings, check_compare_settings};
@@ -17,7 +18,7 @@ use aardvark_bio::merge_solver::{MergeConfigBuilder, solve_merge_region};
 use aardvark_bio::parsing::region_generation::RegionIterator;
 use aardvark_bio::parsing::stratifications::Stratifications;
 use aardvark_bio::util::json_io::save_json;
-use aardvark_bio::util::progress_bar::get_progress_style;
+use aardvark_bio::util::progress_bar::{get_basepair_progress_style, get_progress_style};
 use aardvark_bio::waffle_solver::{solve_compare_region, CompareConfigBuilder};
 use aardvark_bio::writers::compare_parallel::write_compare_outputs;
 use aardvark_bio::writers::merge_summary::MergeSummaryWriter;
@@ -89,27 +90,45 @@ fn run_compare(settings: CompareSettings) {
         }
     }
 
-    // load the reference genome
+    // load the reference genome and any stratifications together
     info!("Pre-loading reference genome into memory...");
-    let reference_genome = match ReferenceGenome::from_fasta(&settings.reference_fn) {
+    if settings.stratifications.is_some() {
+        info!("Pre-loading stratifications into memory in parallel...");
+    }
+    let (reference_result, stratifications_result) = std::thread::scope(|scope| {
+        let reference_handle = scope.spawn(|| {
+            ReferenceGenome::from_fasta(&settings.reference_fn)
+                .map_err(|error| anyhow::Error::msg(format!("{error:?}")))
+        });
+
+        let stratifications_result = settings.stratifications.as_deref().map(Stratifications::from_tsv_batch);
+        let reference_result = reference_handle.join()
+            .map_err(|payload| {
+                let message = payload.downcast_ref::<String>().cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|message| (*message).to_string()))
+                    .unwrap_or_else(|| "reference genome load panicked".to_string());
+                anyhow::Error::msg(message)
+            })
+            .and_then(|result| result);
+        (reference_result, stratifications_result)
+    });
+
+    // check the results for each
+    let reference_genome = match reference_result {
         Ok(rg) => rg,
         Err(e) => {
-            error!("Error while loading reference genome: {e:?}");
+            error!("Error while loading reference genome: {e:#}");
             std::process::exit(exitcode::IOERR);
         }
     };
-
-    // load any stratifications also
-    let stratifications = settings.stratifications.as_deref().map(|strat_fn| {
-        info!("Pre-loading stratifications into memory...");
-        match Stratifications::from_tsv_batch(strat_fn)  {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Error while loading stratifications: {e:#}");
-                std::process::exit(exitcode::IOERR);
-            }
-        }
-    });
+    let stratifications = match stratifications_result {
+        Some(Ok(s)) => Some(s),
+        Some(Err(e)) => {
+            error!("Error while loading stratifications: {e:#}");
+            std::process::exit(exitcode::IOERR);
+        },
+        None => None,
+    };
 
     // check if we're in debug mode
     let skip_count = settings.skip_blocks;
@@ -179,7 +198,7 @@ fn run_compare(settings: CompareSettings) {
     let region_seq_writer = settings.debug_folder.as_ref().map(|debug_path| {
         info!("Opening debug sequence writer file...");
         let out_fn = debug_path.join("region_sequences.tsv.gz");
-        match RegionSequenceWriter::new(&out_fn, w_threads) {
+        match RegionSequenceWriter::new(&out_fn, settings.threads) {
             Ok(rsw) => rsw,
             Err(e) => {
                 error!("Error while building region summary writer: {e:#}");
@@ -218,7 +237,7 @@ fn run_compare(settings: CompareSettings) {
     }
 
     // first pre-load all the regions we are comparing; this is currently single-threaded
-    let all_regions: Vec<CompareRegion> = match region_iter
+    let mut all_regions: Vec<CompareRegion> = match region_iter
         .skip(skip_count)
         .take(take_count)
         .map(|r| {
@@ -249,10 +268,20 @@ fn run_compare(settings: CompareSettings) {
         }
     };
 
+    // largest basepair content first, so a slow region starts while cheap ones are still queued
+    all_regions.sort_by_key(|region| std::cmp::Reverse(region.combined_variant_length()));
+
+    // progress is weighted by region size, so the bar does not stall while the largest regions run first
+    let num_regions = all_regions.len();
+    let total_weight: u64 = all_regions.iter().map(|region| region.combined_variant_length().max(1) as u64).sum();
+    let progress_bar = ProgressBar::new(total_weight).with_style(get_basepair_progress_style());
+    let completed_regions = AtomicUsize::new(0);
+
     // run the parallel iterator to solve them
-    let style = get_progress_style();
+    // par_bridge hands each free thread the next region in sorted order, instead of one thread owning a contiguous block of the largest regions
     info!("Comparing regions...");
-    let mut all_results: Vec<(CompareRegion, Option<CompareBenchmark>)> = all_regions.into_par_iter()
+    let mut all_results: Vec<(CompareRegion, Option<CompareBenchmark>)> = all_regions.into_iter()
+        .par_bridge()
         //.progress_count(num_regions as u64)
         .map(|region| {
             debug!("region = {region:?}");
@@ -266,10 +295,17 @@ fn run_compare(settings: CompareSettings) {
                 }
             };
             debug!("Result = {comparison:?}");
+
+            // advance the bar by this region's size, even if it failed
+            let done = completed_regions.fetch_add(1, Ordering::Relaxed) + 1;
+            progress_bar.inc(region.combined_variant_length().max(1) as u64);
+            progress_bar.set_message(format!("({done}/{num_regions} regions)"));
             (region, comparison)
         })
-        .progress_with_style(style)
         .collect();
+
+    // finish the progress bar manually since we are tracking it ourselves
+    progress_bar.finish();
 
     // sort them by region ID
     all_results.sort_by_key(|(r, _c)| r.region_id());

@@ -73,6 +73,13 @@ impl CompareRegion {
         Coordinates::new(chrom, start, end)
     }
 
+    /// Total length of the truth and query alleles in this region.
+    /// A homozygous alternate contributes its length twice.
+    pub fn combined_variant_length(&self) -> usize {
+        allele_length(&self.truth_variants, &self.truth_zygosity)
+            + allele_length(&self.query_variants, &self.query_zygosity)
+    }
+
     // various getters
     pub fn region_id(&self) -> u64 {
         self.region_id
@@ -99,6 +106,17 @@ impl CompareRegion {
     }
 }
 
+/// Sum of allele lengths, counting each copy of a homozygous alternate.
+/// # Arguments
+/// * `variants` - variants aligned with `zygosity`
+/// * `zygosity` - one zygosity per variant
+fn allele_length(variants: &[Variant], zygosity: &[PhasedZygosity]) -> usize {
+    variants.iter()
+        .zip(zygosity.iter())
+        .map(|(variant, zygosity)| variant.raw_allele_space() * usize::from(zygosity.to_allele_count()))
+        .sum()
+}
+
 impl TryFrom<MultiRegion> for CompareRegion {
     type Error = anyhow::Error;
 
@@ -106,13 +124,22 @@ impl TryFrom<MultiRegion> for CompareRegion {
         ensure!(value.variants().len() == 2, "Cannot convert MultiRegion with variants != 2");
         ensure!(value.zygosity().len() == 2, "Cannot convert MultiRegion with zygosity != 2");
 
+        // move the region fields out instead of cloning them
+        let (region_id, coordinates, variants, zygosity) = value.into_parts();
+        let mut v = variants.into_iter();
+        let truth_variants = v.next().unwrap();
+        let query_variants = v.next().unwrap();
+        let mut z = zygosity.into_iter();
+        let truth_zygosity = z.next().unwrap();
+        let query_zygosity = z.next().unwrap();
+
         Ok(Self {
-            region_id: value.region_id(),
-            coordinates: value.coordinates().clone(),
-            truth_variants: value.variants()[0].clone(),
-            truth_zygosity: value.zygosity()[0].clone(),
-            query_variants: value.variants()[1].clone(),
-            query_zygosity: value.zygosity()[1].clone(),
+            region_id,
+            coordinates,
+            truth_variants,
+            truth_zygosity,
+            query_variants,
+            query_zygosity,
         })
     }
 }
@@ -151,5 +178,20 @@ mod tests {
             vec![PhasedZygosity::UnphasedHeterozygous]
         );
         assert!(bad_region_result.is_err());
+    }
+
+    /// A homozygous alternate contributes twice the length of a heterozygous allele.
+    #[test]
+    fn test_combined_variant_length() {
+        let deletion = Variant::new_deletion(0, 10, b"ACGT".to_vec(), b"A".to_vec()).unwrap();
+        let region = CompareRegion::new(0,
+            Coordinates::new("chr1".to_string(), 0, 20),
+            vec![deletion.clone()],
+            vec![PhasedZygosity::HomozygousAlternate],
+            vec![deletion],
+            vec![PhasedZygosity::UnphasedHeterozygous]
+        ).unwrap();
+        // homozygous 4 bp plus heterozygous 4 bp
+        assert_eq!(region.combined_variant_length(), 12);
     }
 }

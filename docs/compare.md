@@ -2,10 +2,12 @@
 The `aardvark compare` command is used to compare (or benchmark) a "query" call set against a "truth" call set. 
 The `compare` command will load the query and truth variant sets, group them into smaller clusters that are interrogated independently, and then perform the comparisons of the sets.
 The main output is a summary statistic file reporting  precision, recall, and F1 score measuring how similar and different the "query" and "truth" are.
+[Presets](#presets) bundle the usual region-generation settings for small variants, medium structural variants, and large structural variants.
 
 Table of contents:
 
 * [Quickstart](#quickstart)
+* [Presets](#presets)
 * [Output files](#output-files)
   * [Summary statistics file](#summary-statistics-file)
   * [Labeled VCF files](#labeled-vcf-files)
@@ -14,11 +16,12 @@ Table of contents:
 * [Frequently asked questions](#frequently-asked-questions)
 
 # Quickstart
-The following command uses recommended default settings for comparing small variants only.
-See our [recommended settings](./recommended_settings.md) for recommendations comparisons with other variant types.
+The following command uses the `small` [preset](#presets) for comparing small variants.
+See [Presets](#presets) and the [recommended settings](./recommended_settings.md) for medium and large variant runs.
 
 ```bash
 aardvark compare \
+    --preset small \
     --reference <FASTA> \
     --truth-vcf <VCF> \
     --query-vcf <VCF> \
@@ -34,11 +37,21 @@ Required parameters:
 * `--output-dir <DIR>` - Primary output folder containing the [summary statistics file](#summary-statistics-file) and [labeled VCF files](#labeled-vcf-files)
 
 ## Additional options
+* `--preset <PRESET>` / `-p` - Selects a [preset](#presets) configuration of the tool
 * `--threads <THREADS>` - The number of compute threads to use for the comparison step
 * `--output-debug <DIR>` - Creates a [debug folder](#debug-folder) and populates it with more detailed statistics from the comparison
-* `--soft-max-variant-length <BP>` and `--hard-max-variant-length <BP>` - Optional length band applied to both the truth and query VCFs. These must be set together, with `0 < soft max <= hard max <= 10000`. Alleles above the soft max are included only when they improve the comparison. Alleles above the hard max are ignored.
+* `--soft-max-variant-length <BP>` and `--hard-max-variant-length <BP>` - Optional length band applied to both the truth and query VCFs. These must be set together, with `0 < soft max <= hard max <= 1000000`. Alleles above the soft max are included only when they improve the comparison. Alleles above the hard max are ignored.
 * `--truth-sample <SAMPLE>` and `--query-sample <SAMPLE>` - Allows for the specification of the truth or query sample name in the provided VCF. This is usually only needed when they are multi-sample VCFs.
 * `--stratifications` - The root TSV file for a stratification. See [stratifications](#stratifications) for details.
+
+# Presets
+`--preset` (or `-p`) selects a bundled set of options.
+Each preset changes only the options described for it in the [recommended settings](./recommended_settings.md).
+Any other option stays at the value from the command line.
+
+* `small` — Settings intended for small variants comparison (<= 50 bp). See [Comparing small variants](./recommended_settings.md#comparing-small-variants).
+* `medium` — Settings intended for small variants and medium-size structural variants (<=10 kbp). See [Comparing small and medium structural variants](./recommended_settings.md#comparing-small-and-medium-structural-variants).
+* `large` — Settings intended for small to large variants (<= 1 Mbp). See [Comparing structural variants](./recommended_settings.md#comparing-structural-variants).
 
 # Output files
 ## Summary statistics file
@@ -132,21 +145,23 @@ The following files are currently created when this option is specified:
 
 ### Region sequence file
 This file captures the constructed haplotype sequences for each region.
+Any sequence column after `ref_seq` may be written as `={column}` when it is identical to an earlier column.
+If several earlier columns match, the earliest one is used.
 
 Fields:
-* `region_id` - A unique region identifier corresponding to the `RI` field of the [debug VCFs](#debug-vcf-details)
+* `region_id` - A unique region identifier corresponding to the `RI` field of the [labeled VCFs](#vcf-details)
 * `coordinates` - The coordinates of the corresponding region
 * `ref_seq` - The reference sequence within the region, which is copied from the provided reference file
 * `truth_seq1` - The first constructed truth haplotype sequence
 * `truth_seq2` - The second constructed truth haplotype sequence
-* `query_seq1` - The first constructed query haplotype sequence. In an exact match, this is expected to be identical to `truth_seq1`.
-* `query_seq2` - The second constructed query haplotype sequence. In an exact match, this is expected to be identical to `truth_seq2`.
+* `query_seq1` - The first constructed query haplotype sequence
+* `query_seq2` - The second constructed query haplotype sequence
 
 Partial example:
 ```
 region_id	coordinates	ref_seq	truth_seq1	truth_seq2	query_seq1	query_seq2
-0	chr1:782956-783056	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCAGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT
-1	chr1:783125-783225	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACATGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG
+0	chr1:782956-783056	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCAGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	TAATTTTTTATATTGATTGTATACTGCAGTGATAATATTTTGGATGTATCGGGTTAAATAAAATTGACTGATTTCACCTTTTTCCTATTTTAAAAGTGGCT	=truth_seq1	=truth_seq1	=truth_seq1
+1	chr1:783125-783225	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACATGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	GTTGATGAAAAATATTGTTGGTGAGCTCTGCTTAGGTAATATATAGGACACGAGCAGAGAGGAGGCACGTGAACAGTTCTGGCCTGGAGTAGGCTTCATTG	=truth_seq1	=truth_seq1	=truth_seq1
 ...
 ```
 
@@ -154,7 +169,7 @@ region_id	coordinates	ref_seq	truth_seq1	truth_seq2	query_seq1	query_seq2
 This file captures summary metrics for each discrete region, similar to the overall summary statistics file.
 
 Fields:
-* `region_id` - A unique region identifier corresponding to the `RI` field of the [debug VCFs](#debug-vcf-details)
+* `region_id` - A unique region identifier corresponding to the `RI` field of the [labeled VCFs](#vcf-details)
 * `coordinates` - The coordinates of the corresponding region
 * `comparison` - The comparison type for the metrics on the row, which will be one of `GT`, `BASEPAIR`, or one of the optional metrics. This is a summary for `ALL` variant types.
 * `truth_total`, `truth_tp`, `truth_fn`, `query_tp`, `query_fp`, `metric_recall`, `metric_precision`, `metric_f1`, `truth_fn_gt`, `query_fp_gt` - See definitions for the [summary statistics file](#summary-statistics-file)
