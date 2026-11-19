@@ -89,7 +89,7 @@ There are some small technical differences in the Aardvark implementation compar
 * Multi-allelic genotypes are split - A genotype like 1|2 will be split into two heterozygous entries: 1|0 and 0|1. Functionally, this is assigning each alternate allele a genotype.
 
 The genotype mode does generate a single classification (TP, FP, or FN) for each variant in the input VCF files.
-As such, Aardvark uses these `GT` classification to determine which VCF to save each variant in the [debug VCF outputs](./compare.md#debug-vcf-details).
+As such, Aardvark uses these `GT` classification to determine which VCF to save each variant in the [labeled VCF outputs](./compare.md#labeled-vcf-files).
 
 ## Optional comparison types
 ### Haplotype

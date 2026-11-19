@@ -1,4 +1,5 @@
 
+use crate::util::cache::Cache;
 use crate::util::sequence_alignment::wfa_ed;
 
 /// All the variant types we are currently allowing
@@ -69,7 +70,7 @@ pub enum VariantError {
 
 /// A variant definition structure.
 /// It currently assumes that chromosome is fixed and that the variant is a SNP.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Variant {
     /// The vcf index from the input datasets, use 0 if unneeded
     vcf_index: usize,
@@ -89,7 +90,11 @@ pub struct Variant {
     /// if true, flags this as a variant to ignore for _some_ reason
     is_ignored: bool,
     /// if true, this allele is between the soft max and hard max lengths and may be omitted
-    optional: bool
+    optional: bool,
+
+    /// REF/ALT edit distance, filled by the first `alt_ed` call.
+    /// This can be expensive and is sometimes called multiple times, so we now cache it.
+    cached_alt_ed: Cache<usize>,
 }
 
 impl Variant {
@@ -120,7 +125,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -153,7 +159,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -185,7 +192,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -221,7 +229,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -255,7 +264,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -288,7 +298,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -324,7 +335,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -360,7 +372,8 @@ impl Variant {
             allele1,
             raw_allele_space,
             is_ignored: false,
-            optional: false
+            optional: false,
+            cached_alt_ed: Cache::new(),
         })
     }
 
@@ -424,9 +437,20 @@ impl Variant {
         }
     }
 
-    /// Calculates the REF/ALT edit distance for this variant
+    /// Calculates the REF/ALT edit distance for this variant.
+    /// The first call stores the distance, and later calls on this variant or a clone return it.
     pub fn alt_ed(&self) -> anyhow::Result<usize> {
-        wfa_ed(&self.allele0, &self.allele1)
+        // if the distance has already been computed, return it
+        if let Some(distance) = self.cached_alt_ed.get() {
+            return Ok(*distance);
+        }
+
+        // otherwise, compute the distance and store it
+        let distance = wfa_ed(&self.allele0, &self.allele1)?;
+        // another caller may have stored it while this one was computing; both results are the same distance
+        self.cached_alt_ed.set(distance)
+            .map_err(|value| anyhow::anyhow!("failed to store computed edit distance: {value}"))?;
+        Ok(distance)
     }
 
     // getters
@@ -470,7 +494,25 @@ impl Variant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    /// A second `alt_ed` call reuses the stored distance, and equality ignores whether it has been computed.
+    #[test]
+    fn test_alt_ed_is_cached() {
+        let variant = Variant::new_indel(0, 10, b"ACGTACGTAC".to_vec(), b"ACGTAAAAAC".to_vec()).unwrap();
+        let uncomputed = variant.clone();
+        assert_eq!(variant, uncomputed);
+
+        let distance = variant.alt_ed().unwrap();
+        assert_eq!(variant.cached_alt_ed.get().copied(), Some(distance));
+        assert_eq!(variant.alt_ed().unwrap(), distance);
+        assert_eq!(variant, uncomputed);
+
+        // a clone made after the first call carries the stored distance
+        let computed = variant.clone();
+        assert_eq!(computed.cached_alt_ed.get().copied(), Some(distance));
+        assert_eq!(computed.alt_ed().unwrap(), distance);
+    }
+
     #[test]
     fn test_basic_snv() {
         let variant = Variant::new_snv(

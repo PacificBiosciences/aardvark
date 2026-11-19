@@ -1,6 +1,6 @@
 
 use anyhow::{anyhow, bail, Context};
-use coitrees::{COITree, Interval, IntervalTree};
+use coitrees::{COITree, IntervalTree};
 use indexmap::IndexMap;
 use indicatif::ParallelProgressIterator;
 use rayon::prelude::*;
@@ -62,20 +62,32 @@ impl Stratifications {
         // par_iter with progress does not like the BTreeMap, so convert to Vec first
         let filenames: Vec<(String, PathBuf)> = filenames.into_iter().collect();
 
+        // start the largest BED files first
+        let mut work: Vec<(usize, u64, String, PathBuf)> = filenames.into_iter().enumerate()
+            .map(|(index, (label, path))| (index, file_size(&path), label, path))
+            .collect();
+        work.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+
         // now lets actually load these files
         let style = get_progress_style();
-        let datasets: Vec<(String, StratData)> = filenames.into_par_iter()
-            .map(|(label, filepath)| {
+        let mut datasets: Vec<(usize, String, StratData)> = work.into_par_iter()
+            .with_max_len(1)
+            .map(|(index, _size, label, filepath)| {
                 // load the BED file data
                 let strat_data = StratData::from_bed(&filepath)
                     .with_context(|| format!("Error while loading {filepath:?}:"))?;
-                Ok((label, strat_data))
+                Ok((index, label, strat_data))
             })
             .progress_with_style(style)
             .collect::<anyhow::Result<_>>()?;
 
+        // restore the original label order
+        datasets.sort_by_key(|(index, _, _)| *index);
+
         // reformat to an IndexMap
-        let datasets = datasets.into_iter().collect();
+        let datasets = datasets.into_iter()
+            .map(|(_, label, data)| (label, data))
+            .collect();
         Ok(Self {
             datasets
         })
@@ -142,29 +154,44 @@ impl std::fmt::Debug for StratData {
     }
 }
 
+/// Returns the file size in bytes.
+/// A metadata error counts as size 0.
+/// # Arguments
+/// * `path` - the path to the file
+/// # Returns
+/// The file size in bytes, or 0 if the file does not exist or cannot be read.
+fn file_size(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
+}
+
+/// Picks BGZF inflate workers from the compressed BED size.
+/// # Arguments
+/// * `size` - the file size in bytes
+/// # Returns
+/// The number of BGZF inflate workers to use, or 0 if the file is less than 48 MiB.
+fn inflate_worker_count(size: u64) -> usize {
+    const MIB: u64 = 1024 * 1024;
+    if size >= 128 * MIB {
+        3
+    } else if size >= 48 * MIB {
+        2
+    } else {
+        0
+    }
+}
+
 impl StratData {
     /// Loads a BED file and converts all the entries to the COI trees for lookup
     fn from_bed(bed_fn: &Path) -> anyhow::Result<Self> {
-        // first, load the bed file into memory
-        let loaded_bed = LoadedBed::preload_bed_file(bed_fn)?;
-        
-        // now we need to iterate over each chromosome and build a COITree from each
+        // load each chromosome's intervals already converted to COI form
+        let inflate_workers = inflate_worker_count(file_size(bed_fn));
+        let loaded_bed = LoadedBed::preload_bed_file_with_inflaters(bed_fn, inflate_workers)?;
+
+        // build one tree per chromosome, moving the owned chromosome name
         let mut lookup_trees: BTreeMap<String, COITree<(), usize>> = Default::default();
-        for (chrom, intervals) in loaded_bed.chrom_lookup().iter() {
-            // convert the BED into COI intervals
-            let coi_intervals: Vec<Interval<()>> = intervals.iter()
-                .map(|i| {
-                    // the positions are 1-based inclusive
-                    // convert to 0-based inclusive
-                    let start = i.start().ok_or(anyhow!("Missing start"))?.get() as i32 - 1;
-                    let end = i.end().ok_or(anyhow!("Missing end"))?.get() as i32 - 1;
-                    Ok(Interval::new(start, end, ()))
-                })
-                .collect::<anyhow::Result<_>>()?;
-            
-            // now put them into the tree and save it
+        for (chrom, coi_intervals) in loaded_bed.into_chrom_lookup() {
             let coi_tree = COITree::new(&coi_intervals);
-            assert!(lookup_trees.insert(chrom.clone(), coi_tree).is_none());
+            assert!(lookup_trees.insert(chrom, coi_tree).is_none());
         }
 
         // we succeeded

@@ -1,3 +1,11 @@
+# v1.2.0
+## Changes
+- Adds `--preset` (`-p`) option to `compare`, providing recommended settings for different sizes of variation. See [recommended settings](./docs/recommended_settings.md) for details on each preset.
+- Raises the allele sequence limit from 10 kbp to 1 Mbp. A REF or ALT longer than 1 Mbp is still ignored. Large variants increase the run-time of aardvark.
+- Optimizations - Reduced `compare` runtime by through several optimizations. The difference is most noticeable when larger variants are included in the variant sets. For datasets with mixed small and structural variants, we observed a **~30-fold** reduction in CPU requirements relative to v1.1.0.
+- The debug `region_sequences.tsv.gz` file now writes `={column}` when a haplotype matches an earlier column instead of repeating the full sequence, saving on storage space. See the [region sequence file](./docs/compare.md#region-sequence-file) documentation.
+- Region solving has been changed to tackle the hardest regions first. To reflect this change, the `compare` progress bar now tracks completed allele length in megabasepairs (Mbp) in addition to the number of completed regions.
+
 # v1.1.0
 ## Changes
 - Adds `--soft-max-variant-length` and `--hard-max-variant-length` to `compare`. Alleles between the two lengths, in either VCF, are scored only when including them lowers the truth-query edit distance. Alleles above the hard max are ignored.

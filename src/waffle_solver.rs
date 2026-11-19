@@ -79,7 +79,7 @@ use crate::exact_gt_optimizer::optimize_gt_alleles;
 use crate::parsing::stratifications::Stratifications;
 use crate::query_optimizer::{optimize_sequences, OptimizedHaplotypes};
 use crate::util::sequence::homopolymer_compress;
-use crate::util::sequence_alignment::wfa_ed;
+use crate::util::sequence_alignment::wfa_ed_with_lower_bound;
 
 /// These are the variants we currently allow
 const SUPPORTED_VARIANT_TYPES: [VariantType; 8] = [
@@ -371,10 +371,9 @@ fn add_basepair_stats(
         assert_eq!(&query_seq, p_query_seq);
 
         // now do a basepair level comparison
-        let align_metrics = compare_haplotype_sequences(
-            &reference[ref_start..ref_end],
-            &truth_seq, &query_seq,
-            compare_type,
+        let reference_slice = &reference[ref_start..ref_end];
+        let (align_metrics, cached_full_distances) = compare_haplotype_sequences(
+            reference_slice, &truth_seq, &query_seq, compare_type, None, None,
         )?;
         debug!("B#{problem_id} Align metrics: {align_metrics:?}");
         record_basepair_compare_metrics(bench_result, align_metrics, None, compare_type)?;
@@ -404,11 +403,11 @@ fn add_basepair_stats(
                 ).with_context(|| format!("Error while generating sequence for filtered query haplotype 1: {filter_type:?}"))?;
                 let failed_vs = 2 * failed_ed as u64;
 
+                // do the comparison, but ref-truth is already cached
                 let filt_align_metrics = compare_haplotype_sequences(
-                    &reference[ref_start..ref_end],
-                    &truth_seq, &filtered_query,
-                    compare_type,
-                )?;
+                    reference_slice, &truth_seq, &filtered_query, compare_type,
+                    Some(cached_full_distances.full_reference_truth), None,
+                )?.0;
 
                 (filt_align_metrics.query_tp, filt_align_metrics.query_fp + failed_vs) // add the failed incorporations
             } else {
@@ -432,11 +431,11 @@ fn add_basepair_stats(
                 ).with_context(|| format!("Error while generating sequence for filtered truth haplotype 1: {filter_type:?}"))?;
                 let failed_vs = 2 * failed_ed as u64;
 
+                // do the comparison, but ref-query is already cached
                 let filt_align_metrics = compare_haplotype_sequences(
-                    &reference[ref_start..ref_end],
-                    &filtered_truth, &query_seq,
-                    compare_type,
-                )?;
+                    reference_slice, &filtered_truth, &query_seq, compare_type,
+                    None, Some(cached_full_distances.full_reference_query),
+                )?.0;
 
                 (filt_align_metrics.truth_tp, filt_align_metrics.truth_fn + failed_vs)
             } else {
@@ -455,24 +454,46 @@ fn add_basepair_stats(
     Ok(())
 }
 
+/// Doubled edit distances from the full reference, truth, and query sequences of one haplotype.
+struct CachedEditDistances {
+    /// Doubled edit distance of the full reference against the full truth sequence.
+    full_reference_truth: u64,
+    /// Doubled edit distance of the full reference against the full query sequence.
+    full_reference_query: u64,
+}
+
 /// Dispatches to standard or homopolymer-compressed basepair comparison.
+/// Always returns the doubled reference-versus-haplotype distances from that comparison.
+/// For a homopolymer-compressed comparison, those distances are from the compressed sequences.
+/// Optional known edit distances can be provided to accelerate computation, but these are NOT verified.
+/// User is responsible for ensuring that the known edit distances are correct.
 /// # Arguments
 /// * `reference_sequence` - the reference sequence or baseline
 /// * `truth_sequence` - the truth or baseline sequence
 /// * `query_sequence` - the query sequence, which is aligned to truth
 /// * `compare_type` - `MetricsType::Basepair` or `MetricsType::HpcBasepair`
+/// * `known_ed_ref_truth` - doubled edit distance from reference to the unfiltered truth, if already computed
+/// * `known_ed_ref_query` - doubled edit distance from reference to the unfiltered query, if already computed
 fn compare_haplotype_sequences(
     reference_sequence: &[u8],
     truth_sequence: &[u8],
     query_sequence: &[u8],
     compare_type: MetricsType,
-) -> anyhow::Result<SummaryMetrics> {
+    known_ed_ref_truth: Option<u64>,
+    known_ed_ref_query: Option<u64>,
+) -> anyhow::Result<(SummaryMetrics, CachedEditDistances)> {
     match compare_type {
         MetricsType::Basepair => {
-            perform_basepair_compare(reference_sequence, truth_sequence, query_sequence)
+            perform_basepair_compare(
+                reference_sequence, truth_sequence, query_sequence,
+                known_ed_ref_truth, known_ed_ref_query,
+            )
         }
         MetricsType::HpcBasepair => {
-            perform_hpc_basepair_compare(reference_sequence, truth_sequence, query_sequence)
+            perform_hpc_basepair_compare(
+                reference_sequence, truth_sequence, query_sequence,
+                known_ed_ref_truth, known_ed_ref_query,
+            )
         }
         _ => bail!("compare type must be BASEPAIR or HPC_BASEPAIR, got {compare_type:?}"),
     }
@@ -581,14 +602,18 @@ fn add_record_basepair_stats(
 /// Critically, there is no information indicating if a base is a "variant" or just buffer.
 /// The values returned in the SummaryMetrics are doubled to account for half-correctness.
 /// You get the same recall/prec/f1 since everything is doubled, but the numbers are inflated.
+/// Also returns the doubled full reference-versus-truth and reference-versus-query distances as a cache.
 /// # Arguments
 /// * `reference_sequence` - the reference sequence or baseline
 /// * `truth_sequence` - the truth or baseline sequence; output TP + TN should equal the length of this sequence
 /// * `query_sequence` - the query sequence, which is aligned to truth
+/// * `known_ed_ref_truth` - doubled edit distance from the full reference to the full truth, if already computed
+/// * `known_ed_ref_query` - doubled edit distance from the full reference to the full query, if already computed
 fn perform_basepair_compare(
     reference_sequence: &[u8],
-    truth_sequence: &[u8], query_sequence: &[u8]
-) -> anyhow::Result<SummaryMetrics> {
+    truth_sequence: &[u8], query_sequence: &[u8],
+    known_ed_ref_truth: Option<u64>, known_ed_ref_query: Option<u64>,
+) -> anyhow::Result<(SummaryMetrics, CachedEditDistances)> {
     /*
     Core problem:
     - let truth_total = the number of bases in a region that are changed, inserted, or deleted in the truth set
@@ -613,9 +638,18 @@ fn perform_basepair_compare(
         - FP = Y - TP
     */
     // calculate the baseline differences; we double everything here to avoid floating-point; all results should *technically* be halved on the backend
-    let ed_ref_truth = 2 * wfa_ed(reference_sequence, truth_sequence)? as u64;
-    let ed_ref_query = 2 * wfa_ed(reference_sequence, query_sequence)? as u64;
-    let ed_truth_query = 2 * wfa_ed(truth_sequence, query_sequence)? as u64;
+    let ed_ref_truth = match known_ed_ref_truth {
+        Some(distance) => distance,
+        None => 2 * wfa_ed_with_lower_bound(reference_sequence, truth_sequence, 0)? as u64,
+    };
+    let ed_ref_query = match known_ed_ref_query {
+        Some(distance) => distance,
+        None => 2 * wfa_ed_with_lower_bound(reference_sequence, query_sequence, 0)? as u64,
+    };
+
+    // by the triangle inequality, truth and query are at least as far apart as their distances from the reference differ
+    let truth_query_lower_bound = (ed_ref_truth.abs_diff(ed_ref_query) / 2) as usize;
+    let ed_truth_query = 2 * wfa_ed_with_lower_bound(truth_sequence, query_sequence, truth_query_lower_bound)? as u64;
 
     // at the basepair level, truth.TP and query.TP are strictly equal
     let tp_shared = (ed_ref_truth + ed_ref_query - ed_truth_query) / 2;
@@ -631,7 +665,11 @@ fn perform_basepair_compare(
         query_tp: tp_shared,
         query_fp
     };
-    Ok(summary_metrics)
+    let cached_full_distances = CachedEditDistances {
+        full_reference_truth: ed_ref_truth,
+        full_reference_query: ed_ref_query,
+    };
+    Ok((summary_metrics, cached_full_distances))
 }
 
 /// Like [`perform_basepair_compare`], but homopolymer-compresses reference, truth, and query first.
@@ -639,15 +677,20 @@ fn perform_basepair_compare(
 /// * `reference_sequence` - the reference sequence or baseline
 /// * `truth_sequence` - the truth or baseline sequence
 /// * `query_sequence` - the query sequence, which is aligned to truth
+/// * `known_ed_ref_truth` - doubled edit distance from the compressed reference to the unfiltered compressed truth, if already computed
+/// * `known_ed_ref_query` - doubled edit distance from the compressed reference to the unfiltered compressed query, if already computed
 fn perform_hpc_basepair_compare(
     reference_sequence: &[u8],
     truth_sequence: &[u8],
     query_sequence: &[u8],
-) -> anyhow::Result<SummaryMetrics> {
+    known_ed_ref_truth: Option<u64>,
+    known_ed_ref_query: Option<u64>,
+) -> anyhow::Result<(SummaryMetrics, CachedEditDistances)> {
     perform_basepair_compare(
         &homopolymer_compress(reference_sequence),
         &homopolymer_compress(truth_sequence),
         &homopolymer_compress(query_sequence),
+        known_ed_ref_truth, known_ed_ref_query,
     )
 }
 
@@ -1225,23 +1268,54 @@ mod tests {
         let result = perform_basepair_compare(
             b"ACGTACGT",
             b"ACGTACGT", // exact match to REF
-            b"ACCTAGGT" // two false positives
-        ).unwrap();
+            b"ACCTAGGT", // two false positives
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(0, 0, 0, 2 * 2));
 
         let result = perform_basepair_compare(
             b"ACGTACGT",
             b"ACCTAGGT", // two false negatives
-            b"ACGTACGT" // exact match to REF
-        ).unwrap();
+            b"ACGTACGT", // exact match to REF
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(0, 2 * 2, 0, 0));
 
         let result = perform_basepair_compare(
             b"ACGTACGT",
             b"ACCTAGGT", // two TP
-            b"ACCTAGGT" // exact match to truth, so two TP
-        ).unwrap();
+            b"ACCTAGGT", // exact match to truth, so two TP
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(2 * 2, 0, 2 * 2, 0));
+    }
+
+    /// A cached full-sequence distance matches a fresh comparison when one haplotype is filtered.
+    #[test]
+    fn test_cached_full_edit_distances_match_fresh_compare() {
+        let reference = b"ACGTACGT";
+        let truth = b"ACCTAGGT";
+        let query = b"ACGTACGT";
+        let (_metrics, cached_full_distances) = perform_basepair_compare(reference, truth, query, None, None).unwrap();
+        assert_eq!(cached_full_distances.full_reference_truth, 4);
+        assert_eq!(cached_full_distances.full_reference_query, 0);
+
+        let filtered_query = b"ACGTAGGT";
+        assert_eq!(
+            perform_basepair_compare(
+                reference, truth, filtered_query,
+                Some(cached_full_distances.full_reference_truth), None,
+            ).unwrap().0,
+            perform_basepair_compare(reference, truth, filtered_query, None, None).unwrap().0,
+        );
+        let filtered_truth = b"ACGTAGGT";
+        assert_eq!(
+            perform_basepair_compare(
+                reference, filtered_truth, query,
+                None, Some(cached_full_distances.full_reference_query),
+            ).unwrap().0,
+            perform_basepair_compare(reference, filtered_truth, query, None, None).unwrap().0,
+        );
     }
 
     #[test]
@@ -1249,8 +1323,9 @@ mod tests {
         let result = perform_basepair_compare(
             b"TAT",
             b"TCT", // SNP
-            b"TACT" // looks like neither, it's half-right
-        ).unwrap();
+            b"TACT", // looks like neither, it's half-right
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(1, 1, 1, 1)); // the one situation where you don't get doubles, and thats because it's half-right, half-wrong
     }
 
@@ -1259,15 +1334,17 @@ mod tests {
         let result = perform_basepair_compare(
             b"TAT",
             b"TAAAAT", // big insertion
-            b"TAAAT" // mostly correctly, but one FN base
-        ).unwrap();
+            b"TAAAT", // mostly correctly, but one FN base
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(2*2, 2, 2*2, 0));
 
         let result = perform_basepair_compare(
             b"TAT",
             b"TAAAAT", // big insertion
-            b"TAAAAAT" // mostly correctly, but one FP base
-        ).unwrap();
+            b"TAAAAAT", // mostly correctly, but one FP base
+            None, None,
+        ).unwrap().0;
         assert_eq!(result, SummaryMetrics::new(2*3, 0, 2*3, 2));
     }
 

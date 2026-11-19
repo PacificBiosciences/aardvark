@@ -52,6 +52,13 @@ impl MultiRegion {
         })
     }
 
+    /// Consumes the region and returns its owned fields.
+    /// # Returns
+    /// The region id, coordinates, per-sample variants, and per-sample zygosity.
+    pub fn into_parts(self) -> (u64, Coordinates, Vec<Vec<Variant>>, Vec<Vec<PhasedZygosity>>) {
+        (self.region_id, self.coordinates, self.variants, self.zygosity)
+    }
+
     // various getters
     pub fn region_id(&self) -> u64 {
         self.region_id

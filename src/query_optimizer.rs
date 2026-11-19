@@ -53,14 +53,14 @@ assert_eq!(query_sequences.query_zygosity(), &truth_zygosity);
 
 use anyhow::ensure;
 use log::debug;
-use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
-use std::hash::Hash;
+use std::collections::BinaryHeap;
 
 use crate::data_types::coordinates::Coordinates;
 use crate::data_types::phase_enums::{Allele, PhasedZygosity};
 use crate::data_types::variants::Variant;
 use crate::dwfa::haplotype_dwfa::HaplotypeDWFA;
+use crate::util::priority_entry::PriorityEntry;
 
 /// Result from our query optimization routine
 #[derive(Clone, Debug)]
@@ -190,8 +190,8 @@ pub fn optimize_sequences(
 
     // put it into the queue as our seed node
     let priority = root_node.priority();
-    let mut pqueue: PriorityQueue<ComparisonNode, NodePriority> = Default::default();
-    pqueue.push(root_node, priority);
+    let mut pqueue: BinaryHeap<PriorityEntry<NodePriority, ComparisonNode>> = BinaryHeap::new();
+    pqueue.push(PriorityEntry::new(priority, root_node));
 
     // set our best to max ED with no result
     let mut best_ed = usize::MAX;
@@ -203,7 +203,8 @@ pub fn optimize_sequences(
     let mut bucket_counts = vec![0; total_variant_count+1];
 
     // loop while our queue is not empty
-    while let Some((current_node, _priority)) = pqueue.pop() {
+    while let Some(entry) = pqueue.pop() {
+        let (_priority, current_node) = entry.into_parts();
         if current_node.total_cost() > best_ed {
             // the cost of this node is worse than something already found, so skip it
             continue;
@@ -308,11 +309,17 @@ pub fn optimize_sequences(
                 current_variant, allele1, allele2, sync_extension
             )?;
             let new_priority = new_node.priority();
-            pqueue.push(new_node, new_priority);
+            pqueue.push(PriorityEntry::new(new_priority, new_node));
         } else {
-            // multiple extension, so we need to create new nodes for each
-            for (allele1, allele2) in extensions {
-                let mut new_node = current_node.clone();
+            // multiple extension, so we need to create new nodes for each; the last one takes the current node instead of a clone
+            let mut current_node = Some(current_node);
+            let last_index = extensions.len() - 1;
+            for (index, (allele1, allele2)) in extensions.into_iter().enumerate() {
+                let mut new_node = if index == last_index {
+                    current_node.take().expect("current node is only taken by the last extension")
+                } else {
+                    current_node.as_ref().expect("current node is only taken by the last extension").clone()
+                };
                 new_node.set_node_id(next_node_id);
                 next_node_id += 1;
                 new_node.extend_variant(
@@ -320,7 +327,7 @@ pub fn optimize_sequences(
                     current_variant, allele1, allele2, sync_extension
                 )?;
                 let new_priority = new_node.priority();
-                pqueue.push(new_node, new_priority);
+                pqueue.push(PriorityEntry::new(new_priority, new_node));
             }
         }
     }

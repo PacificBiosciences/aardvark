@@ -1,0 +1,264 @@
+name: Benchmark comparison
+on:
+  pull_request:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  bench:
+    name: cargo bench
+    runs-on: ubuntu-latest
+    env:
+      # Printed in the comparison comment. Criterion requires at least 10 samples.
+      BENCH_SAMPLE_SIZE: 100
+      BENCH_WARMUP: 0.2
+      BENCH_MEASUREMENT: 0.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bench upstream
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git checkout --detach "origin/${{ github.base_ref }}"
+          cargo bench --bench compare_bench -- --save-baseline upstream --sample-size "$BENCH_SAMPLE_SIZE" --warm-up-time "$BENCH_WARMUP" --measurement-time "$BENCH_MEASUREMENT" --noplot --color never
+
+      - name: Bench pull request
+        run: |
+          git fetch --no-tags origin "pull/${{ github.event.pull_request.number }}/head"
+          git checkout --detach "${{ github.event.pull_request.head.sha }}"
+          # The upstream run also left its results in `new/`. Drop those so a
+          # bench that the pull request does not run is not compared with itself.
+          if [ -d target/criterion ]; then
+            find target/criterion -type d -name new -print0 | xargs -0 -r rm -rf
+          fi
+          cargo bench --bench compare_bench -- --baseline-lenient upstream --sample-size "$BENCH_SAMPLE_SIZE" --warm-up-time "$BENCH_WARMUP" --measurement-time "$BENCH_MEASUREMENT" --noplot --color never 2>&1 | tee /tmp/bench-compare.txt
+
+      - name: Render comparison table
+        if: always()
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node <<'ENDSCRIPT'
+          const fs = require('fs');
+          const path = require('path');
+
+          const root = 'target/criterion';
+          const outPath = '/tmp/bench-compare.md';
+          const rawPath = '/tmp/bench-compare.txt';
+          const shortSha = (process.env.HEAD_SHA || '').slice(0, 7);
+
+          function listEstimates(dir) {
+            if (!fs.existsSync(dir)) return [];
+            const out = [];
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) out.push(...listEstimates(full));
+              else if (entry.name === 'estimates.json') out.push(full);
+            }
+            return out;
+          }
+
+          // Same units as critcmp: 1 decimal for the mean, 2 for the stddev.
+          function formatTime(nanos, stddev) {
+            let div, label;
+            if (nanos < 2_000) { div = 1; label = 'ns'; }
+            else if (nanos < 2_000_000) { div = 1_000; label = 'µs'; }
+            else if (nanos < 2_000_000_000) { div = 1_000_000; label = 'ms'; }
+            else { div = 1_000_000_000; label = 's'; }
+            return `${(nanos / div).toFixed(1)}±${(stddev / div).toFixed(2)}${label}`;
+          }
+
+          function formatDifference(base, changes) {
+            const difference = -(1 - changes / base) * 100;
+            return (changes <= base ? '' : '+') + difference.toFixed(2) + '%';
+          }
+
+          // Combined relative noise of the two means, in percentage points.
+          function noisePercent(base, changes) {
+            const baseRel = base.mean > 0 ? base.stddev / base.mean : 0;
+            const changesRel = changes.mean > 0 ? changes.stddev / changes.mean : 0;
+            return 100 * Math.hypot(baseRel, changesRel);
+          }
+
+          function mix(from, to, t) {
+            const channel = (hex, i) => parseInt(hex.slice(i, i + 2), 16);
+            const blended = [0, 2, 4].map((i) => Math.round(channel(from, i) + (channel(to, i) - channel(from, i)) * t));
+            return blended.map((value) => value.toString(16).padStart(2, '0')).join('');
+          }
+
+          // GitHub strips style attributes. A badge keeps a real color, and its own
+          // background stays readable in light and dark mode.
+          function colorBadge(text, hex) {
+            const message = text.replaceAll('-', '--').replaceAll('_', '__').replaceAll(' ', '_').replaceAll('%', '%25').replaceAll('+', '%2B');
+            return `![${text}](https://img.shields.io/badge/${message}-${hex}?style=flat-square)`;
+          }
+
+          // Grey inside the noise band, and for any change under 1%. Outside that,
+          // green (faster) or red (slower) saturates across the next 20 percentage points.
+          function percentBadge(text, pct, noise) {
+            const excess = Math.abs(pct) - Math.max(noise, 1);
+            if (excess <= 0) return colorBadge(text, '6e7781');
+            const t = Math.min(excess / 20, 1);
+            const hex = pct < 0 ? mix('c8f7d4', '1a7f37', t) : mix('ffd0cc', 'cf222e', t);
+            return colorBadge(text, hex);
+          }
+
+          function loadSide(file) {
+            const dir = path.dirname(file);
+            const side = path.basename(dir);
+            if (side !== 'upstream' && side !== 'new') return null;
+            const estimates = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const benchFile = path.join(dir, 'benchmark.json');
+            let name = path.basename(path.dirname(dir));
+            if (fs.existsSync(benchFile)) {
+              const info = JSON.parse(fs.readFileSync(benchFile, 'utf8'));
+              if (info.full_id) name = info.full_id;
+            }
+            return {
+              key: path.dirname(dir),
+              side,
+              name,
+              mean: estimates.mean.point_estimate,
+              stddev: estimates.std_dev.point_estimate,
+            };
+          }
+
+          const byKey = new Map();
+          for (const file of listEstimates(root)) {
+            const side = loadSide(file);
+            if (!side) continue;
+            const row = byKey.get(side.key) || { name: side.name };
+            row.name = side.name || row.name;
+            row[side.side] = side;
+            byKey.set(side.key, row);
+          }
+
+          const rows = [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+          // Sum only the cases measured on both sides. The spread of a sum is the
+          // root-sum-square of the spreads, so the total keeps a noise band.
+          function combinedRow(paired) {
+            const total = (pick) => ({
+              mean: paired.reduce((sum, row) => sum + pick(row).mean, 0),
+              stddev: Math.hypot(...paired.map((row) => pick(row).stddev)),
+            });
+            return { name: '**Combined**', upstream: total((row) => row.upstream), new: total((row) => row.new) };
+          }
+
+          function formatRow(row) {
+            const base = row.upstream;
+            const changes = row.new;
+            const baseText = base ? formatTime(base.mean, base.stddev) : 'N/A';
+            const changesText = changes ? formatTime(changes.mean, changes.stddev) : 'N/A';
+            let difference = 'N/A';
+            if (base && changes && base.mean > 0) {
+              const pct = -(1 - changes.mean / base.mean) * 100;
+              difference = percentBadge(formatDifference(base.mean, changes.mean), pct, noisePercent(base, changes));
+            }
+            return `| ${row.name.replace(/\|/g, '\\|')} | ${baseText} | ${changesText} | ${difference} |`;
+          }
+
+          let markdown;
+          if (rows.length === 0) {
+            const raw = fs.existsSync(rawPath) ? fs.readFileSync(rawPath, 'utf8') : 'No benchmark output.';
+            const clipped = raw.length > 60000 ? `${raw.slice(0, 60000)}\n\n[truncated]` : raw;
+            markdown = [
+              'Benchmark comparison failed before producing estimates.',
+              '',
+              '```text',
+              clipped.replaceAll('```', "'''").trimEnd(),
+              '```',
+              '',
+            ].join('\n');
+          } else {
+            const paired = rows.filter((row) => row.upstream && row.new);
+            const body = [...rows.map(formatRow), ...(paired.length ? [formatRow(combinedRow(paired))] : [])].join('\n');
+            const parameters = `Sample size ${process.env.BENCH_SAMPLE_SIZE}, warm-up ${process.env.BENCH_WARMUP} s, measurement ${process.env.BENCH_MEASUREMENT} s.`;
+            markdown = [
+              `## Criterion Benchmark (compare_bench) for ${shortSha}`,
+              '',
+              parameters,
+              '',
+              '  <details>',
+              '    <summary>Click to view benchmark</summary>',
+              '',
+              '| Test | Base         | PR               | % |',
+              '|------|--------------|------------------|---|',
+              body,
+              '',
+              'Combined adds the mean of every case measured on both sides. Grey is inside the noise of the two runs, or a change under 1%. Green is faster and red is slower, and the color deepens over the next 20 percentage points.',
+              '',
+              '  </details>',
+              '',
+            ].join('\n');
+          }
+
+          fs.writeFileSync(outPath, markdown);
+          ENDSCRIPT
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          if [ -f /tmp/bench-compare.md ]; then
+            cat /tmp/bench-compare.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-compare
+          path: /tmp/bench-compare.txt
+          if-no-files-found: ignore
+
+      - name: Comment on pull request
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- bench-compare -->';
+            const report = '/tmp/bench-compare.md';
+            if (!fs.existsSync(report)) {
+              return;
+            }
+            const body = [marker, fs.readFileSync(report, 'utf8').trimEnd(), ''].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }

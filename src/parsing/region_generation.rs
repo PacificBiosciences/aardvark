@@ -2,7 +2,6 @@
 use anyhow::{anyhow, bail, ensure, Context};
 use indicatif::ParallelProgressIterator;
 use log::{debug, info, trace};
-use noodles::core::region::Interval;
 use noodles::core::Region;
 use noodles::vcf;
 use noodles::vcf::variant::record::samples::keys::key as vcf_key;
@@ -22,6 +21,11 @@ use crate::parsing::noodles_helper::LoadedBed;
 use crate::util::progress_bar::get_progress_style;
 
 type VcfChromKey = (usize, usize);
+
+/// Longest REF or ALT sequence that is loaded.
+/// Alleles longer than this are ignored, and `--hard-max-variant-length` cannot exceed it.
+pub const MAX_ALLELE_LENGTH: usize = 1_000_000;
+
 pub struct RegionIterator {
     /// Tracks the next block index
     next_region_id: u64,
@@ -219,14 +223,13 @@ impl RegionIterator {
                 load_keys.push((i, chrom_index));
             }
 
-            // add an entry for the chromosome
-            let full_start = intervals[0].start().unwrap();
-            let full_end = intervals.last().unwrap().end().unwrap();
+            // convert the COI intervals into a noodles interval for the full chromosome span
+            let span = full_chrom_span(intervals)?;
 
             // build the region noodles will recognize
             let chrom_region = Region::new(
                 chrom.clone(),
-                full_start..=full_end // Position here is 1-based
+                span
             );
             full_chrom_regions.push(chrom_region);
 
@@ -290,13 +293,17 @@ impl Iterator for RegionIterator {
             self.chrom_index += 1;
 
             let num_input_vcfs = self.vcf_paths.len();
-            let full_start = intervals[0].start().unwrap();
-            let full_end = intervals.last().unwrap().end().unwrap();
+
+            // convert the COI intervals into a noodles interval for the full chromosome span
+            let span = match full_chrom_span(intervals) {
+                Ok(span) => span,
+                Err(e) => return Some(Err(e)),
+            };
 
             // build the region noodles will recognize
             let full_chrom_region = Region::new(
                 chrom.clone(),
-                full_start..=full_end // Position here is 1-based
+                span
             );
 
             let joint_results: Vec<(usize, Vec<(Variant, PhasedZygosity)>)> = if let Some(preloaded_variants) = self.preloaded_variants.as_mut() {
@@ -530,20 +537,15 @@ fn load_variants_in_region(
             } else {
                 "Error while parsing first variant record".to_string()
             })?;
-        let record_buf = vcf::variant::RecordBuf::try_from_variant_record(vcf_header, record.as_ref())
-            .with_context(|| if let Some(p) = last_pos {
-                format!("Error while converting variant record to buffer after: {p:?}")
-            } else {
-                "Error while converting first variant record to buffer".to_string()
-            })?;
-    
-        let variants = parse_variant(&record_buf, sample_index, enable_trimming, variant_length_band)
+        let variants = parse_variant(record.as_ref(), vcf_header, sample_index, enable_trimming, variant_length_band)
             .with_context(|| {
-                format!("Error parsing variants in {record_buf:?}:")
+                let chrom = record.reference_sequence_name(vcf_header).unwrap_or("unknown");
+                let pos = record.variant_start().and_then(Result::ok);
+                format!("Error parsing variants at {chrom}:{pos:?}:")
             })?;
 
         // update the last position
-        last_pos = Some(record_buf.variant_start().unwrap());
+        last_pos = record.variant_start().and_then(Result::ok);
 
         // add them to the list
         trace!("\tFound {variants:?}");
@@ -562,38 +564,41 @@ fn load_variants_in_region(
 /// Note that this method currently split multi-ALT calls into multiple entries (e.g., 2|1 -> 2|0 and 0|1).
 /// # Arguments
 /// * `record` - the record to parse
+/// * `header` - the VCF header for the record
 /// * `sample_index` - index of the sample to pull genotypes from
 /// * `enable_trimming` - Allows variants to get trimmed, removing extra bases from REF/ALT
 /// * `variant_length_band` - optional `(soft_max, hard_max)` event-length thresholds
 fn parse_variant(
-    record: &vcf::variant::RecordBuf,
+    record: &dyn vcf::variant::Record,
+    header: &vcf::Header,
     sample_index: usize,
     enable_trimming: bool,
     variant_length_band: Option<(usize, usize)>
 ) -> anyhow::Result<Vec<(Variant, PhasedZygosity)>> {
     // variant level column
-    let chrom = record.reference_sequence_name();
-    let pos = record.variant_start().ok_or(anyhow!("Missing POS"))?; // 1-based
-    let ref_seq = record.reference_bases();
-    let alts = record.alternate_bases().as_ref();
-    
+    let chrom = record.reference_sequence_name(header)?;
+    let pos = record.variant_start().ok_or(anyhow!("Missing POS"))??; // 1-based
+    let ref_seq = record.reference_bases().iter().collect::<std::io::Result<Vec<u8>>>()?;
+    let alternate_bases = record.alternate_bases();
+    let alts = alternate_bases.iter().collect::<std::io::Result<Vec<&str>>>()?;
+
     // sample specific information
-    let all_samples = record.samples();
-    let sample = all_samples.get_index(sample_index)
+    let all_samples = record.samples()?;
+    let sample = all_samples.iter().nth(sample_index)
         .ok_or_else(|| anyhow!("Missing sample fields at index {sample_index}"))?;
-    let gt = match sample.get(vcf_key::GENOTYPE)
-        .ok_or(anyhow!("Missing GT"))? {
-        Some(gt) => gt,
+    let gt = match sample.get(header, vcf_key::GENOTYPE).ok_or(anyhow!("Missing GT"))?? {
+        Some(vcf::variant::record::samples::series::Value::Genotype(genotype)) => genotype,
         None => {
             // this entry's GT = '.', which is a no-op for us
             return Ok(Default::default());
-        }
+        },
+        Some(other) => bail!("Non-genotype value provided to parse_genotype: {other:?}"),
     };
 
     trace!("{chrom}\t{pos}\t{ref_seq:?}\t{alts:?}\tGT={gt:?}");
 
     // parse the genotype
-    let genotypes = parse_genotype(gt)?;
+    let genotypes = parse_genotype(gt.as_ref())?;
     
     // go through the genotypes we found and convert them into Variants
     let mut ret = vec![];
@@ -603,7 +608,7 @@ fn parse_variant(
             continue;
         }
 
-        let mut ref_sequence = ref_seq.as_bytes().to_vec();
+        let mut ref_sequence = ref_seq.clone();
         let mut alt_sequence = alts[alt_index-1].as_bytes().to_vec();
         if alt_sequence[0] == b'<' {
             // e.g. <INV>; we need sequence-resolved
@@ -622,13 +627,12 @@ fn parse_variant(
         }
 
         // Safety cap on allele sequence length. The hard max cannot exceed this.
-        const MAX_ALLELE_LENGTH: usize = 10000;
         if ref_sequence.len() > MAX_ALLELE_LENGTH || alt_sequence.len() > MAX_ALLELE_LENGTH {
             debug!("Ignoring variant at {chrom}:{pos} {}>{}", ref_sequence.len(), alt_sequence.len());
             continue;
         }
 
-        let variant_type = get_variant_type(record, &ref_sequence, &alt_sequence)?;
+        let variant_type = get_variant_type(record, header, &ref_sequence, &alt_sequence)?;
         let mut variant = match variant_type {
             VariantType::Snv => Variant::new_snv(0, position, ref_sequence, alt_sequence),
             VariantType::Insertion => Variant::new_insertion(0, position, ref_sequence, alt_sequence),
@@ -672,56 +676,51 @@ fn parse_variant(
 /// Multiple returns values are possible if multiple ALTs are part of the genotype.
 /// # Arguments
 /// * `gt` - the GT field from the record
-fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> anyhow::Result<Vec<(usize, PhasedZygosity)>> {
+fn parse_genotype(gt: &(dyn vcf::variant::record::samples::series::value::genotype::Genotype + '_)) -> anyhow::Result<Vec<(usize, PhasedZygosity)>> {
     use vcf::variant::record::samples::series::value::genotype::Phasing;
 
     let mut ret = vec![];
-    if let vcf::variant::record_buf::samples::sample::Value::Genotype(genotype) = gt {
-        let alleles = genotype.as_ref();
+    let alleles = gt.iter().collect::<std::io::Result<Vec<_>>>()?;
 
-        // figure out the indices
-        let (a1, a2) = match alleles.len() {
-            // treats hemi-zygous as homozygous
-            // TODO: do we want a special hemizygous state? how do we score that?
-            1 => (alleles[0].position(), alleles[0].position()),
-            2 => (alleles[0].position(), alleles[1].position()),
-            _ => bail!("allele.len() != [1, 2]: {gt:?}")
-        };
+    // figure out the indices
+    let (a1, a2) = match alleles.len() {
+        // treats hemi-zygous as homozygous
+        // TODO: do we want a special hemizygous state? how do we score that?
+        1 => (alleles[0].0, alleles[0].0),
+        2 => (alleles[0].0, alleles[1].0),
+        _ => bail!("allele.len() != [1, 2]: {gt:?}")
+    };
 
-        // if it's None ('.'), we treat it as a reference ('0') call
-        let i1 = a1.unwrap_or(0);
-        let i2 = a2.unwrap_or(0);
+    // if it's None ('.'), we treat it as a reference ('0') call
+    let i1 = a1.unwrap_or(0);
+    let i2 = a2.unwrap_or(0);
 
-        // both have an index set
-        if i1 == i2 {
-            // homozygous path
-            if i1 == 0 {
-                // homozygous reference
-            } else {
-                // homozygous alternate
-                ret.push((i1, PhasedZygosity::HomozygousAlternate))
-            }
+    // both have an index set
+    if i1 == i2 {
+        // homozygous path
+        if i1 == 0 {
+            // homozygous reference
         } else {
-            // heterozygous, figure out if they're phased
-            let p1 = alleles[0].phasing();
-            let p2 = alleles[1].phasing();
-            let is_phased = p1 == Phasing::Phased || p2 == Phasing::Phased;
-
-            // now build the phase enum for the variant
-            let ap1 = if is_phased { PhasedZygosity::PhasedHet10 } else { PhasedZygosity::UnphasedHeterozygous };
-            let ap2 = if is_phased { PhasedZygosity::PhasedHet01 } else { PhasedZygosity::UnphasedHeterozygous };
-
-            // save them if non-reference
-            if i1 != 0 {
-                ret.push((i1, ap1));
-            }
-            if i2 != 0 {
-                ret.push((i2, ap2));
-            }
+            // homozygous alternate
+            ret.push((i1, PhasedZygosity::HomozygousAlternate))
         }
     } else {
-        // it's not a Genotype; should we throw an error?
-        bail!("Non-genotype value provided to parse_genotype: {gt:?}");
+        // heterozygous, figure out if they're phased
+        let p1 = alleles[0].1;
+        let p2 = alleles[1].1;
+        let is_phased = p1 == Phasing::Phased || p2 == Phasing::Phased;
+
+        // now build the phase enum for the variant
+        let ap1 = if is_phased { PhasedZygosity::PhasedHet10 } else { PhasedZygosity::UnphasedHeterozygous };
+        let ap2 = if is_phased { PhasedZygosity::PhasedHet01 } else { PhasedZygosity::UnphasedHeterozygous };
+
+        // save them if non-reference
+        if i1 != 0 {
+            ret.push((i1, ap1));
+        }
+        if i2 != 0 {
+            ret.push((i2, ap2));
+        }
     }
     Ok(ret)
 }
@@ -729,23 +728,27 @@ fn parse_genotype(gt: &vcf::variant::record_buf::samples::sample::Value) -> anyh
 /// Given a record, this will extract the type of the variant contained
 /// # Arguments
 /// * `record` - the original loaded record, which may have additional tags to parse
+/// * `header` - the VCF header for the record
 /// * `ref_sequence` - the reference sequence, which may be adjusted from what is in the record
-/// * `ref_sequence` - the alt sequence, which may be adjusted from what is in the record
-fn get_variant_type(record: &vcf::variant::RecordBuf, ref_sequence: &[u8], alt_sequence: &[u8]) -> anyhow::Result<VariantType> {
+/// * `alt_sequence` - the alt sequence, which may be adjusted from what is in the record
+fn get_variant_type(record: &dyn vcf::variant::Record, header: &vcf::Header, ref_sequence: &[u8], alt_sequence: &[u8]) -> anyhow::Result<VariantType> {
     use vcf::variant::record::info::field::key as info_key;
+    use vcf::variant::record::info::field::Value;
 
     // check for SVs, some of which are supported
-    let opt_sv_type = record.info().get(info_key::SV_TYPE);
-    if let Some(Some(sv_type)) = opt_sv_type {
+    let info = record.info();
+    let opt_sv_type = match info.get(header, info_key::SV_TYPE) {
+        None => None,
+        Some(result) => result?,
+    };
+    if let Some(sv_type) = opt_sv_type {
         let vt = match sv_type {
-            vcf::variant::record_buf::info::field::Value::String(s) => {
-                match s.as_str() {
-                    "BND" => VariantType::SvBreakend,
-                    "DEL" => VariantType::SvDeletion,
-                    "DUP" => VariantType::SvDuplication,
-                    "INS" => VariantType::SvInsertion,
-                    _ => bail!("Unsupported SVTYPE detected: {sv_type:?}")
-                }
+            Value::String(ref s) => match s.as_ref() {
+                "BND" => VariantType::SvBreakend,
+                "DEL" => VariantType::SvDeletion,
+                "DUP" => VariantType::SvDuplication,
+                "INS" => VariantType::SvInsertion,
+                _ => bail!("Unsupported SVTYPE detected: {sv_type:?}")
             },
             _ => bail!("Unsupported SVTYPE detected: {sv_type:?}")
         };
@@ -753,8 +756,9 @@ fn get_variant_type(record: &vcf::variant::RecordBuf, ref_sequence: &[u8], alt_s
     }
 
     // check for STRs, which are split into TrContraction and TrExpansion base on the length of the REF/ALT sequences
-    let opt_trid = record.info().get("TRID");
-    let vt = if let Some(Some(_trid)) = opt_trid {
+    // this one-line checks for presence of TRID, and that is is not the "." value (i.e., missing)
+    let has_trid = info.get(header, "TRID").transpose()?.flatten().is_some();
+    let vt = if has_trid {
         if alt_sequence.len() < ref_sequence.len() {
             VariantType::TrContraction
         } else {
@@ -802,14 +806,29 @@ enum Containment {
     After
 }
 
+/// Converts sorted 0-based inclusive COI intervals into a 1-based inclusive noodles span.
+/// # Arguments
+/// * `intervals` - the intervals to convert, sorted and 0-based inclusive
+/// # Errors
+/// Returns an error when `intervals` is empty or a coordinate is not a valid 1-based position.
+/// # Returns
+/// A 1-based inclusive noodles span from the first interval start through the last interval end.
+fn full_chrom_span(intervals: &[coitrees::Interval<()>]) -> anyhow::Result<std::ops::RangeInclusive<noodles::core::Position>> {
+    let first = intervals.first().ok_or_else(|| anyhow!("BED chromosome has no intervals"))?;
+    let last = intervals.last().ok_or_else(|| anyhow!("BED chromosome has no intervals"))?;
+    let full_start = noodles::core::Position::try_from(first.first as usize + 1)?;
+    let full_end = noodles::core::Position::try_from(last.last as usize + 1)?;
+    Ok(full_start..=full_end)
+}
+
 /// Checks if the given region _fully_ contains the described variant.
 /// # Arguments
 /// * `interval` - an interval from a BED region
 /// * `variant` - the variant to check
-fn get_variant_containment(interval: &Interval, variant: &Variant) -> Containment {
-    // get the region interval, which is 1-based and convert to 0-based
-    let zb_start = interval.start().unwrap().get() - 1;
-    let zb_end = interval.end().unwrap().get();
+fn get_variant_containment(interval: &coitrees::Interval<()>, variant: &Variant) -> Containment {
+    // COI intervals are 0-based inclusive, and this check uses an exclusive end
+    let zb_start = interval.first as usize;
+    let zb_end = interval.last as usize + 1;
 
     let variant_start = variant.position() as usize;
     let variant_end = variant_start + variant.ref_len();
